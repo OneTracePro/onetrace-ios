@@ -153,7 +153,8 @@ public enum OneTrace {
     /// The installation id: the `mobile_push` identity of the profile while push can be sent.
     public static var installationId: String? { current?.installationId }
 
-    /// For the Flutter and React Native wrappers, before `setup`: report the wrapper as the library.
+    /// For the Flutter and React Native wrappers, before `setup`: report the wrapper as the library — `flutter` becomes
+    /// `onetrace-flutter` in the event context and `flutter 1.0.0` in the installation.
     public static func setWrapper(name: String, version: String) {
         lock.lock()
         wrapper = (name, version)
