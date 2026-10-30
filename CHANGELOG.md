@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — 2026-10-30
+## 1.0.0 — 2026-10-31
 
 - Events, screens, identify, alias and reset with the Segment Spec format of the OneTrace.pro API.
 - A persistent queue: events survive restarts and offline periods, are sent in batches and retried on network errors, `429` and `5xx`.
