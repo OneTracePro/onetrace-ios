@@ -28,6 +28,8 @@ final class Client {
     /// In-app messages received but not shown yet (SDK queue only).
     private var inApp: [[String: Any]] = []
     private var seen: [String] = []
+    /// Taps already reported: the delegate and a wrapper (firebase_messaging and the like) may both pass one on.
+    private var openedTokens: [String] = []
 
     init(
         config: OneTraceConfig,
@@ -155,10 +157,17 @@ final class Client {
         }
     }
 
-    /// A OneTrace notification was opened: reports the open (and the click on its link). Returns the link to open.
+    /// A OneTrace notification was opened: reports the open (and the click on its link) once. Returns the link to open.
     @discardableResult
     func notificationOpened(_ userInfo: [AnyHashable: Any]) -> URL? {
         guard let token = userInfo[Self.pushToken] as? String else { return nil }
+        let first: Bool = queue.sync {
+            guard !openedTokens.contains(token) else { return false }
+            openedTokens.append(token)
+            if openedTokens.count > 50 { openedTokens.removeFirst() }
+            return true
+        }
+        guard first else { return nil }
         let url = (userInfo[Self.pushURL] as? String).flatMap { $0.isEmpty ? nil : $0 }
         queue.async { self.pushEventNow(token, "opened", url) }
         return url.flatMap(URL.init(string:))

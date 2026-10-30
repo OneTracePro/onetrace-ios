@@ -8,3 +8,4 @@
 - Installation registration for mobile push: the APNs (or FCM) token, the notification permission, the app and device details; a sign-out moves the installation to the next user.
 - `OneTraceNotificationDelegate`: foreground presentation and delivery receipts of OneTrace notifications, opens and links of tapped ones.
 - `OneTraceNotificationService`: images in notifications through a Notification Service Extension.
+- A notification tap is reported once, even when both `OneTraceNotificationDelegate` and a wrapper (Flutter, React Native) pass it on.

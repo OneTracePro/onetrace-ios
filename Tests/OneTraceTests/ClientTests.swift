@@ -183,6 +183,15 @@ final class ClientTests: XCTestCase {
         XCTAssertNil(client.notificationOpened(["aps": ["alert": "Not ours"]]))
     }
 
+    func testReportsATapOnceWhenTheDelegateAndTheWrapperBothPassItOn() {
+        let client = client()
+        XCTAssertNotNil(client.notificationOpened(["cdp_token": "abc.def", "cdp_url": "shopapp://sale"]))
+        XCTAssertNil(client.notificationOpened(["cdp_token": "abc.def", "cdp_url": "shopapp://sale"]))
+        drain(client)
+
+        XCTAssertEqual(transport.requests.filter { $0.path == "/push/events" }.count, 1)
+    }
+
     func testKeepsTheNewestEventsWhenTheQueueIsFull() {
         let queue = EventQueue(file: queueFile, maxSize: 3)
         (1...5).forEach { queue.add(["n": $0]) }
