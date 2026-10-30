@@ -41,8 +41,10 @@ public enum OneTrace {
 
         #if canImport(UIKit) && !os(watchOS)
         let permissions = NotificationPermission()
+        let inApp = InAppPresenter(openLinks: config.openPushLinks) { [weak created] token, event, url in created?.reportInApp(token, event, url) }
         created.notificationsEnabled = { permissions.enabled }
-        lifecycle = AppLifecycle(client: created, permissions: permissions)
+        created.presenter = { inApp.present($0) }
+        lifecycle = AppLifecycle(client: created, permissions: permissions, inApp: inApp)
         #endif
 
         created.appLaunched()
@@ -94,6 +96,17 @@ public enum OneTrace {
         #else
         current?.setPushToken(token, provider: provider.rawValue)
         #endif
+    }
+
+    /// Holds in-app messages back while true, for example during checkout; they are shown after it is set back to false
+    /// and the app opens again or tracks their trigger event.
+    public static func pauseInAppMessages(_ paused: Bool) {
+        current?.queue.async { current?.inAppPaused = paused }
+    }
+
+    /// Asks OneTrace for in-app messages now; the SDK also does it when the app opens and after sending events.
+    public static func fetchInAppMessages() {
+        current?.fetchInApp()
     }
 
     /// Call after the user answered the notification permission prompt.

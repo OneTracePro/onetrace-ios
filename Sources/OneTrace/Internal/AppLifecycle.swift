@@ -21,11 +21,13 @@ final class NotificationPermission {
 final class AppLifecycle {
     let permissions: NotificationPermission
     private let client: Client
+    private let inApp: InAppPresenter
     private var observers: [NSObjectProtocol] = []
 
-    init(client: Client, permissions: NotificationPermission) {
+    init(client: Client, permissions: NotificationPermission, inApp: InAppPresenter) {
         self.client = client
         self.permissions = permissions
+        self.inApp = inApp
     }
 
     func attach() {
@@ -36,6 +38,9 @@ final class AppLifecycle {
         observers.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { [weak self] _ in
             guard let self = self else { return }
             self.permissions.refresh { self.client.appForeground(fromBackground: true) }
+        })
+        observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.inApp.showNext()
         })
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }

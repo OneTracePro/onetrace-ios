@@ -10,7 +10,16 @@ final class FakeTransport: Transport {
 
     private let lock = NSLock()
     private(set) var requests: [Request] = []
+    private(set) var gets: [String] = []
     var batchStatus = 202
+    var inApp = "{\"data\": []}"
+
+    func get(_ path: String) -> HttpResult {
+        lock.lock()
+        defer { lock.unlock() }
+        gets.append(path)
+        return HttpResult(status: 200, body: inApp)
+    }
 
     func post(_ path: String, _ body: [String: Any]) -> HttpResult {
         lock.lock()
@@ -179,5 +188,31 @@ final class ClientTests: XCTestCase {
         (1...5).forEach { queue.add(["n": $0]) }
 
         XCTAssertEqual(EventQueue(file: queueFile, maxSize: 3).peek(10).map { $0["n"] as? Int }, [3, 4, 5])
+    }
+
+    func testShowsInAppMessagesAfterAFetchOrAfterTheirTriggerEvent() {
+        var shown: [String] = []
+        let client = client(flushAt: 100)
+        client.presenter = { shown.append($0["title"] as? String ?? "") }
+        transport.inApp = #"{"data": [{"token": "t1", "title": "Welcome", "trigger_event": null}, {"token": "t2", "title": "Cart reminder", "trigger_event": "add_to_cart"}]}"#
+
+        client.fetchInApp()
+        client.fetchInApp()
+        drain(client)
+        XCTAssertEqual(shown, ["Welcome"])
+        XCTAssertTrue(transport.gets[0].hasPrefix("/in-app/messages?anonymousId=\(storage.anonymousId)&appId="))
+        XCTAssertTrue(transport.gets[0].hasSuffix("&platform=ios"))
+
+        client.track("product_viewed", [:])
+        client.track("add_to_cart", [:])
+        client.track("add_to_cart", [:])
+        drain(client)
+        XCTAssertEqual(shown, ["Welcome", "Cart reminder"])
+
+        client.reportInApp("t2", "clicked", "shopapp://cart")
+        drain(client)
+        let event = transport.requests.first { $0.path == "/in-app/events" }!.body
+        XCTAssertEqual(event["event"] as? String, "clicked")
+        XCTAssertEqual(event["url"] as? String, "shopapp://cart")
     }
 }

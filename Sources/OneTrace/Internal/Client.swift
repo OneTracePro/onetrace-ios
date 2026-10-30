@@ -19,6 +19,16 @@ final class Client {
     /// Whether the user allows notifications; refreshed by the app layer before registrations.
     var notificationsEnabled: () -> Bool
 
+    /// Shows in-app messages; set by `OneTrace.setup` (nil in tests that do not need it).
+    var presenter: (([String: Any]) -> Void)?
+
+    /// Holds in-app messages back while true.
+    var inAppPaused = false
+
+    /// In-app messages received but not shown yet (SDK queue only).
+    private var inApp: [[String: Any]] = []
+    private var seen: [String] = []
+
     init(
         config: OneTraceConfig,
         storage: Storage,
@@ -49,7 +59,10 @@ final class Client {
     }
 
     func track(_ event: String, _ properties: [String: Any?]) {
-        queue.async { self.enqueue("track", ["event": event, "properties": Json.object(properties)]) }
+        queue.async {
+            self.enqueue("track", ["event": event, "properties": Json.object(properties)])
+            self.presentInApp(event)
+        }
     }
 
     func screen(_ name: String, _ properties: [String: Any?]) {
@@ -127,6 +140,8 @@ final class Client {
                 self.enqueue("track", ["event": "app_opened", "properties": ["from_background": fromBackground, "version": self.device.appVersion]])
             }
             if fromBackground { self.registerNow(force: false) }
+            self.fetchInAppNow()
+            self.presentInApp(nil)
         }
     }
 
@@ -153,6 +168,23 @@ final class Client {
     func notificationReceived(_ userInfo: [AnyHashable: Any]) {
         guard let token = userInfo[Self.pushToken] as? String else { return }
         queue.async { self.pushEventNow(token, "received", nil) }
+    }
+
+    /// Asks the platform for in-app messages now.
+    func fetchInApp() {
+        queue.async {
+            self.fetchInAppNow()
+            self.presentInApp(nil)
+        }
+    }
+
+    func reportInApp(_ token: String, _ event: String, _ url: String?) {
+        queue.async {
+            var body: [String: Any] = ["token": token, "event": event]
+            if let url = url { body["url"] = url }
+            let result = self.transport.post("/in-app/events", body)
+            self.log("In-app \(event) reported: HTTP \(result.status)")
+        }
     }
 
     var anonymousId: String { queue.sync { storage.anonymousId } }
@@ -183,6 +215,11 @@ final class Client {
             if result.successful {
                 events.remove(batch.count)
                 log("Sent \(batch.count) events")
+                // The events may have started a journey with an in-app message: pick it up.
+                if events.count == 0 {
+                    fetchInAppNow()
+                    presentInApp(nil)
+                }
             } else if result.status == 401 || result.status == 403 {
                 // A wrong key: the events wait until a new app version fixes it.
                 log("The write key was rejected (HTTP \(result.status))")
@@ -196,6 +233,40 @@ final class Client {
                 log("Dropped \(batch.count) events: HTTP \(result.status) \(result.body.prefix(500))")
             }
         }
+    }
+
+    private func fetchInAppNow() {
+        var query = URLComponents()
+        query.queryItems = [URLQueryItem(name: "anonymousId", value: storage.anonymousId), URLQueryItem(name: "appId", value: device.bundleId), URLQueryItem(name: "platform", value: "ios")]
+        let result = transport.get("/in-app/messages?" + (query.percentEncodedQuery ?? ""))
+
+        guard result.successful,
+              let json = (try? JSONSerialization.jsonObject(with: Data(result.body.utf8))) as? [String: Any],
+              let data = json["data"] as? [[String: Any]] else {
+            log("In-app messages: HTTP \(result.status)")
+            return
+        }
+
+        for message in data {
+            guard let token = message["token"] as? String, !token.isEmpty, !seen.contains(token) else { continue }
+            seen.append(token)
+            inApp.append(message)
+        }
+
+        if seen.count > 200 { seen.removeFirst(seen.count - 200) }
+    }
+
+    /// Shows the messages for this moment: every message without a trigger after a fetch, or one triggered by `event`.
+    private func presentInApp(_ event: String?) {
+        guard let show = presenter, !inAppPaused else { return }
+
+        let trigger = { (message: [String: Any]) -> String? in (message["trigger_event"] as? String).flatMap { $0.isEmpty ? nil : $0 } }
+        var matching = inApp.filter { trigger($0) == event }
+        if event != nil { matching = Array(matching.prefix(1)) }
+
+        let tokens = Set(matching.compactMap { $0["token"] as? String })
+        inApp.removeAll { tokens.contains($0["token"] as? String ?? "") }
+        matching.forEach(show)
     }
 
     private func registerNow(force: Bool) {

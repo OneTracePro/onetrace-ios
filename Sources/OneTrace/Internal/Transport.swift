@@ -16,6 +16,9 @@ struct HttpResult {
 protocol Transport {
     /// Blocking POST: called from the SDK queue only.
     func post(_ path: String, _ body: [String: Any]) -> HttpResult
+
+    /// Blocking GET: called from the SDK queue only.
+    func get(_ path: String) -> HttpResult
 }
 
 /// JSON over HTTPS with the write key, `URLSession` only.
@@ -35,15 +38,27 @@ final class URLSessionTransport: Transport {
     }
 
     func post(_ path: String, _ body: [String: Any]) -> HttpResult {
-        guard let url = URL(string: apiURL + path), let data = try? JSONSerialization.data(withJSONObject: body) else {
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            return HttpResult(status: 0, body: "invalid request")
+        }
+
+        return send("POST", path, data)
+    }
+
+    func get(_ path: String) -> HttpResult {
+        send("GET", path, nil)
+    }
+
+    private func send(_ method: String, _ path: String, _ data: Data?) -> HttpResult {
+        guard let url = URL(string: apiURL + path) else {
             return HttpResult(status: 0, body: "invalid request")
         }
 
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = method
         request.httpBody = data
         request.setValue("Bearer \(writeKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        if data != nil { request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type") }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
 
