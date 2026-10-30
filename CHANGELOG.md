@@ -9,4 +9,5 @@
 - `OneTraceNotificationDelegate`: foreground presentation and delivery receipts of OneTrace notifications, opens and links of tapped ones.
 - In-app messages: fetched when the app opens and after events are sent, shown over the key window as a modal, a banner or a full screen; shown, button taps and closes are reported.
 - `OneTraceNotificationService`: images in notifications through a Notification Service Extension.
+- Numbers from Objective-C and the wrappers (`NSNumber`) stay numbers: `1` is no longer sent as `true`.
 - A notification tap is reported once, even when both `OneTraceNotificationDelegate` and a wrapper (Flutter, React Native) pass it on.

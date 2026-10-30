@@ -65,6 +65,16 @@ final class ClientTests: XCTestCase {
         client.queue.sync {}
     }
 
+    func testTellsBooleansFromNumbersOfWrappers() {
+        let values = Json.object([
+            "quantity": NSNumber(value: 1), "price": NSNumber(value: 49.9), "gift": NSNumber(value: true), "native": 1, "flag": false,
+            "nested": ["count": NSNumber(value: 0), "none": NSNull()] as [String: Any],
+        ])
+
+        let json = String(data: try! JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]), encoding: .utf8)
+        XCTAssertEqual(json, #"{"flag":false,"gift":true,"native":1,"nested":{"count":0,"none":null},"price":49.9,"quantity":1}"#)
+    }
+
     func testApiUrlFromTheHost() {
         XCTAssertEqual(OneTraceConfig(writeKey: "k", host: "https://crm.example.com/").apiURL, "https://crm.example.com/api/v1")
         XCTAssertEqual(OneTraceConfig(writeKey: "k", host: " https://crm.example.com/api/v1 ").apiURL, "https://crm.example.com/api/v1")

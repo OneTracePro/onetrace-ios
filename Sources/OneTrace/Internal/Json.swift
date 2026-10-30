@@ -7,8 +7,14 @@ enum Json {
     }
 
     static func value(_ value: Any?) -> Any {
+        // Numbers from Objective-C, Flutter and React Native are NSNumber objects, and `NSNumber(1) as? Bool` succeeds:
+        // tell booleans from numbers by the object itself.
+        if let object = value, type(of: object) is NSNumber.Type, let number = object as? NSNumber {
+            return isBoolean(number) ? number.boolValue as Any : number
+        }
+
         switch value {
-        case nil: return NSNull()
+        case nil, is NSNull: return NSNull()
         case let v as String: return v
         case let v as Bool: return v
         case let v as Int: return v
@@ -21,6 +27,14 @@ enum Json {
         case let v as [Any?]: return v.map { self.value($0) }
         case let v?: return String(describing: v)
         }
+    }
+
+    static func isBoolean(_ number: NSNumber) -> Bool {
+        #if canImport(Darwin)
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+        #else
+        return String(cString: number.objCType) == "c"
+        #endif
     }
 
     static func iso(_ date: Date) -> String {
