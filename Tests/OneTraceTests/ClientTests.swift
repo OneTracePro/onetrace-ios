@@ -147,7 +147,7 @@ final class ClientTests: XCTestCase {
     func testMovesTheInstallationToTheNextUserOnIdentifyAndReset() {
         let client = client(flushAt: 1)
         let anonymous = storage.anonymousId
-        client.identify("u-42", ["email": "anna@example.com"])
+        client.identify("u-42", ["email": "anna@example.com"], nil)
         drain(client)
 
         let identify = transport.events.last!
@@ -164,6 +164,40 @@ final class ClientTests: XCTestCase {
         XCTAssertTrue(transport.registrations.last!["userId"] is NSNull)
         XCTAssertEqual(transport.registrations.last!["anonymousId"] as? String, storage.anonymousId)
         XCTAssertNil(transport.events.last!["userId"])
+    }
+
+    func testSendsTheUserIdSignatureWithTheUserIdUntilReset() {
+        let client = client(flushAt: 1)
+        client.identify("u-42", [:], "a1b2")
+        client.identify("u-42", ["plan": "pro"], nil)
+        client.track("viewed", [:])
+        drain(client)
+
+        XCTAssertEqual(transport.events.map { $0["userHash"] as? String }, ["a1b2", "a1b2", "a1b2"])
+        XCTAssertEqual(transport.registrations.last!["userHash"] as? String, "a1b2")
+
+        // A new signature of the same user re-registers the installation with it.
+        client.identify("u-42", [:], "c3d4")
+        drain(client)
+        XCTAssertEqual(transport.registrations.last!["userHash"] as? String, "c3d4")
+
+        // Another user without a signature does not inherit the previous one.
+        client.identify("u-7", [:], nil)
+        drain(client)
+        XCTAssertNil(transport.events.last!["userHash"])
+        XCTAssertNil(transport.registrations.last!["userHash"])
+
+        client.alias("u-8", "e5f6")
+        drain(client)
+        XCTAssertEqual(transport.events.last!["userHash"] as? String, "e5f6")
+        XCTAssertEqual(transport.registrations.last!["userHash"] as? String, "e5f6")
+
+        client.reset()
+        client.track("viewed", [:])
+        drain(client)
+        XCTAssertNil(storage.userHash)
+        XCTAssertNil(transport.events.last!["userHash"])
+        XCTAssertNil(transport.registrations.last!["userHash"])
     }
 
     func testTracksInstallsAndUpdates() {

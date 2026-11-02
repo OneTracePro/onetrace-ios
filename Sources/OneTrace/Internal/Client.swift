@@ -71,20 +71,25 @@ final class Client {
         queue.async { self.enqueue("screen", ["name": name, "properties": Json.object(properties)]) }
     }
 
-    func identify(_ userId: String?, _ traits: [String: Any?]) {
+    func identify(_ userId: String?, _ traits: [String: Any?], _ userHash: String?) {
         queue.async {
             let changed = userId != nil && userId != self.storage.userId
+            // A signature belongs to its user id: a new user drops the previous one, the same user keeps it until a new one.
+            let signed = userId != nil && userHash != nil && userHash != self.storage.userHash
             if let userId = userId { self.storage.userId = userId }
+            if changed || signed { self.storage.userHash = userHash }
             self.enqueue("identify", ["traits": Json.object(traits)])
-            // Another user on this installation: the platform moves it to them without merging the profiles.
-            if changed { self.registerNow(force: false) }
+            // Another user on this installation: the platform moves it to them without merging the profiles. A new
+            // signature re-registers too: with a required signature an unsigned user id was not accepted.
+            if changed || signed { self.registerNow(force: false) }
         }
     }
 
-    func alias(_ userId: String) {
+    func alias(_ userId: String, _ userHash: String?) {
         queue.async {
             let previous = self.storage.userId ?? self.storage.anonymousId
             self.storage.userId = userId
+            self.storage.userHash = userHash
             self.enqueue("alias", ["previousId": previous])
             self.registerNow(force: false)
         }
@@ -94,6 +99,7 @@ final class Client {
         queue.async {
             self.flushNow()
             self.storage.userId = nil
+            self.storage.userHash = nil
             self.storage.newAnonymousId()
             self.registerNow(force: false)
         }
@@ -209,7 +215,10 @@ final class Client {
         message["anonymousId"] = storage.anonymousId
         message["timestamp"] = Json.iso(clock())
         message["context"] = device.build()
-        if let userId = storage.userId { message["userId"] = userId }
+        if let userId = storage.userId {
+            message["userId"] = userId
+            if let userHash = storage.userHash { message["userHash"] = userHash }
+        }
         events.add(message)
         log("Queued \(type) \(fields["event"] ?? fields["name"] ?? "")")
 
@@ -303,7 +312,7 @@ final class Client {
             push = ["enabled": false]
         }
 
-        return [
+        var registration: [String: Any] = [
             "installationId": storage.installationId,
             "anonymousId": storage.anonymousId,
             "userId": storage.userId.map { $0 as Any } ?? NSNull(),
@@ -315,6 +324,9 @@ final class Client {
             "push": push,
             "sdk": ["name": device.sdk.name, "version": device.sdk.version],
         ]
+        if storage.userId != nil, let userHash = storage.userHash { registration["userHash"] = userHash }
+
+        return registration
     }
 
     private func pushEventNow(_ token: String, _ event: String, _ url: String?) {

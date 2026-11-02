@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 — unreleased
+
+- Signed user ids (`userHash`): `identify(_:traits:userHash:)` and `alias(_:userHash:)` keep the signature from your server with the user id and send it with every event and the installation registration; `reset()` clears it. Required when the project turns on the user id signature.
+
 ## 1.0.0 — 2026-10-31
 
 - Events, screens, identify, alias and reset with the Segment Spec format of the OneTrace.pro API.

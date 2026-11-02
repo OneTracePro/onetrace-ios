@@ -26,6 +26,12 @@ final class Storage {
         set { defaults.set(newValue, forKey: "user_id") }
     }
 
+    /// Signature of `userId` from the app's server (ADR-158): sent with the user id.
+    var userHash: String? {
+        get { defaults.string(forKey: "user_hash") }
+        set { defaults.set(newValue, forKey: "user_hash") }
+    }
+
     var appVersion: String? {
         get { defaults.string(forKey: "app_version") }
         set { defaults.set(newValue, forKey: "app_version") }

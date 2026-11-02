@@ -65,13 +65,18 @@ public enum OneTrace {
     }
 
     /// The user signed in or updated their data. Pass nil as the user id to update traits of the current visitor.
-    public static func identify(_ userId: String?, traits: [String: Any?] = [:]) {
-        current?.identify(userId, traits)
+    ///
+    /// `userHash` is the signature of the user id: HMAC-SHA256 of `userId` with the project's signing key, in hex.
+    /// Your server computes it after sign-in and returns it to the app; never put the signing key into the app. When
+    /// the project requires the signature, a user id without it is ignored. The SDK keeps it with the user id and sends
+    /// it with every event and the installation; a later `identify` of the same user without it keeps the stored one.
+    public static func identify(_ userId: String?, traits: [String: Any?] = [:], userHash: String? = nil) {
+        current?.identify(userId, traits, userHash)
     }
 
-    /// Links the current anonymous visitor to a new user id.
-    public static func alias(_ userId: String) {
-        current?.alias(userId)
+    /// Links the current anonymous visitor to a new user id; `userHash` is its signature, as in `identify`.
+    public static func alias(_ userId: String, userHash: String? = nil) {
+        current?.alias(userId, userHash)
     }
 
     /// The user signed out: a new anonymous id, and the installation leaves the previous user's profile.
