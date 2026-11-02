@@ -6,7 +6,7 @@ import UIKit
 /// The app and device in Segment Spec terms: `context.app`, `context.device`, `context.os`, locale, time zone, screen
 /// and the library that sent the event.
 final class DeviceContext {
-    static let sdkVersion = "1.0.0"
+    static let sdkVersion = "1.1.0"
 
     let installationId: String
     private let bundle: Bundle

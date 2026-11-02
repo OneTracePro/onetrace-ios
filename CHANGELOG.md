@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — unreleased
+## 1.1.0 — 2026-11-02
 
 - Signed user ids (`userHash`): `identify(_:traits:userHash:)` and `alias(_:userHash:)` keep the signature from your server with the user id and send it with every event and the installation registration; `reset()` clears it. Required when the project turns on the user id signature.
 

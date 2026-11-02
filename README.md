@@ -14,7 +14,7 @@ The iOS SDK of [OneTrace.pro](https://onetrace.pro), the customer data platform:
 Swift Package Manager: in Xcode **File → Add Package Dependencies…** with `https://github.com/OneTracePro/onetrace-ios`, or in `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/OneTracePro/onetrace-ios", from: "1.0.0")
+.package(url: "https://github.com/OneTracePro/onetrace-ios", from: "1.1.0")
 ```
 
 Add the `OneTrace` product to the app target, and `OneTraceNotificationService` to a Notification Service Extension if you want images in notifications.
