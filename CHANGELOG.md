@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0 — 2026-11-09
+
+- Message feed: personal cards that stay in the app until they expire or the user removes them. `fetchFeed` (callback or `async`), `feedCards`, the unread count with `observeFeedUnread` for a badge, `observeFeed` for your own UI, and `feedCardShown`, `feedCardClicked` (opens the link like push links) and `feedCardDismissed` reports. A show not confirmed by the server yet stays read for the session; a removed card does not come back on a refresh. Refreshed when the app opens and after `reset()` once the app uses the feed.
+- A ready-made feed screen: `OneTraceFeedViewController` for UIKit, `OneTraceFeedView` for SwiftUI and `OneTrace.presentFeed()` in one call — classic, captioned and banner cards, pinned first, remove button, pull to refresh, empty state, shown reports for cards at least half visible, labels in 10 languages, light and dark appearance.
 ## 1.1.0 — 2026-11-02
 
 - Signed user ids (`userHash`): `identify(_:traits:userHash:)` and `alias(_:userHash:)` keep the signature from your server with the user id and send it with every event and the installation registration; `reset()` clears it. Required when the project turns on the user id signature.

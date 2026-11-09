@@ -199,8 +199,8 @@ private final class PassThroughView: UIView {
     }
 }
 
-private extension UIControl {
-    /// A closure target action on iOS 13 (UIAction arrived in iOS 14).
+extension UIControl {
+    /// A closure target action on iOS 13 (UIAction arrived in iOS 14); also used by the feed screen.
     func addAction(for events: UIControl.Event, _ handler: @escaping () -> Void) {
         let target = ClosureTarget(handler)
         addTarget(target, action: #selector(ClosureTarget.fire), for: events)

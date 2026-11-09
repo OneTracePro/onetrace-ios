@@ -33,5 +33,10 @@ final class LiveTests: XCTestCase {
         XCTAssertEqual(device.status, 200, device.body)
         let answer = try JSONSerialization.jsonObject(with: Data(device.body.utf8)) as? [String: Any]
         XCTAssertEqual(answer?["push"] as? Bool, true)
+
+        let feed = transport.get("/feed?anonymousId=\(anonymous)")
+        XCTAssertEqual(feed.status, 200, feed.body)
+        let cards = try JSONSerialization.jsonObject(with: Data(feed.body.utf8)) as? [String: Any]
+        XCTAssertNotNil(cards?["data"] as? [Any], feed.body)
     }
 }

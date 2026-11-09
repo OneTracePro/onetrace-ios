@@ -13,11 +13,15 @@ final class FakeTransport: Transport {
     private(set) var gets: [String] = []
     var batchStatus = 202
     var inApp = "{\"data\": []}"
+    var feed = "{\"data\": [], \"unread\": 0}"
+    var feedStatus = 200
+    var feedEventStatus = 200
 
     func get(_ path: String) -> HttpResult {
         lock.lock()
         defer { lock.unlock() }
         gets.append(path)
+        if path.hasPrefix("/feed") { return HttpResult(status: feedStatus, body: feed) }
         return HttpResult(status: 200, body: inApp)
     }
 
@@ -27,8 +31,10 @@ final class FakeTransport: Transport {
         // Round-trip through JSON: what the platform would receive.
         let data = try! JSONSerialization.data(withJSONObject: body)
         requests.append(Request(path: path, body: try! JSONSerialization.jsonObject(with: data) as! [String: Any]))
-        return HttpResult(status: path == "/batch" ? batchStatus : 200, body: "{}")
+        return HttpResult(status: path == "/batch" ? batchStatus : path == "/feed/events" ? feedEventStatus : 200, body: "{}")
     }
+
+    var feedEvents: [[String: Any]] { requests.filter { $0.path == "/feed/events" }.map(\.body) }
 
     var events: [[String: Any]] { requests.filter { $0.path == "/batch" }.flatMap { $0.body["batch"] as! [[String: Any]] } }
 
@@ -56,7 +62,8 @@ final class ClientTests: XCTestCase {
             transport: transport,
             device: DeviceContext(installationId: storage.installationId),
             clock: { Date(timeIntervalSince1970: 1_800_000_000) },
-            notificationsEnabled: { [unowned self] in self.notifications }
+            notificationsEnabled: { [unowned self] in self.notifications },
+            deliver: { $0() }
         )
     }
 

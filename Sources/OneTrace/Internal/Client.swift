@@ -15,6 +15,8 @@ final class Client {
     private let transport: Transport
     private let clock: () -> Date
     private var timer: DispatchSourceTimer?
+    /// The message feed; its `…Now` methods run on `queue`.
+    let feed: Feed
 
     /// Whether the user allows notifications; refreshed by the app layer before registrations.
     var notificationsEnabled: () -> Bool
@@ -39,7 +41,8 @@ final class Client {
         device: DeviceContext,
         queue: DispatchQueue = DispatchQueue(label: "pro.onetrace.sdk"),
         clock: @escaping () -> Date = Date.init,
-        notificationsEnabled: @escaping () -> Bool = { false }
+        notificationsEnabled: @escaping () -> Bool = { false },
+        deliver: @escaping (@escaping () -> Void) -> Void = { DispatchQueue.main.async(execute: $0) }
     ) {
         self.config = config
         self.storage = storage
@@ -49,6 +52,8 @@ final class Client {
         self.queue = queue
         self.clock = clock
         self.notificationsEnabled = notificationsEnabled
+        let debug = config.debug
+        feed = Feed(transport: transport, anonymousId: { storage.anonymousId }, log: { message in if debug { print("[OneTrace] \(message)") } }, deliver: deliver)
     }
 
     func start() {
@@ -102,6 +107,7 @@ final class Client {
             self.storage.userHash = nil
             self.storage.newAnonymousId()
             self.registerNow(force: false)
+            self.feed.resetNow()
         }
     }
 
@@ -150,6 +156,7 @@ final class Client {
             if fromBackground { self.registerNow(force: false) }
             self.fetchInAppNow()
             self.presentInApp(nil)
+            self.feed.refreshIfUsedNow()
         }
     }
 
@@ -199,6 +206,47 @@ final class Client {
             if let url = url { body["url"] = url }
             let result = self.transport.post("/in-app/events", body)
             self.log("In-app \(event) reported: HTTP \(result.status)")
+        }
+    }
+
+    /// Loads the message feed; `completion` gets the cards through `feed.deliver` (the main thread in the app).
+    func fetchFeed(_ completion: (([OneTraceFeedCard]) -> Void)?) {
+        queue.async {
+            let cards = self.feed.fetchNow()
+            if let completion = completion { self.feed.deliver { completion(cards) } }
+        }
+    }
+
+    func reportFeed(_ token: String, _ event: String, _ url: String?) {
+        queue.async {
+            switch event {
+            case "shown": self.feed.shownNow(token)
+            case "clicked": self.feed.clickedNow(token, url)
+            default: self.feed.dismissedNow(token)
+            }
+        }
+    }
+
+    func observeFeedUnread(_ listener: @escaping (Int) -> Void) -> OneTraceObservation {
+        observation { $0.observeUnread(listener) }
+    }
+
+    func observeFeed(_ listener: @escaping ([OneTraceFeedCard]) -> Void) -> OneTraceObservation {
+        observation { $0.observeCards(listener) }
+    }
+
+    /// A feed listener added on the SDK queue; cancelling it there too keeps the order of the two.
+    private func observation(_ add: @escaping (Feed) -> UUID) -> OneTraceObservation {
+        let slot = ListenerSlot()
+        let feed = self.feed
+        queue.async {
+            if !slot.cancelled { slot.id = add(feed) }
+        }
+        return OneTraceObservation { [queue] in
+            queue.async {
+                slot.cancelled = true
+                if let id = slot.id { feed.removeListener(id) }
+            }
         }
     }
 
@@ -339,4 +387,10 @@ final class Client {
     private func log(_ message: @autoclosure () -> String) {
         if config.debug { print("[OneTrace] \(message())") }
     }
+}
+
+/// A feed listener id, set and read on the SDK queue only.
+private final class ListenerSlot {
+    var id: UUID?
+    var cancelled = false
 }

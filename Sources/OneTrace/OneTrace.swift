@@ -114,6 +114,68 @@ public enum OneTrace {
         current?.fetchInApp()
     }
 
+    /// Loads the message feed of this user: pinned cards first, then the newest, up to 50. `completion` runs on the main
+    /// thread; on a network error it gets the cards loaded before. Once the app uses the feed, the SDK also refreshes
+    /// it when the app opens and after `reset()`.
+    public static func fetchFeed(_ completion: @escaping ([OneTraceFeedCard]) -> Void) {
+        guard let client = current else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
+        client.fetchFeed(completion)
+    }
+
+    /// Loads the message feed, as `fetchFeed(_:)`.
+    public static func fetchFeed() async -> [OneTraceFeedCard] {
+        await withCheckedContinuation { continuation in
+            fetchFeed { continuation.resume(returning: $0) }
+        }
+    }
+
+    /// The feed cards loaded last.
+    public static var feedCards: [OneTraceFeedCard] { current?.feed.currentCards ?? [] }
+
+    /// Cards not shown to the user yet, for a badge.
+    public static var feedUnreadCount: Int { current?.feed.currentUnread ?? 0 }
+
+    /// Calls `handler` on the main thread with the unread count now and every time it changes; loads the feed if it
+    /// was not loaded yet. Keep the result and call `cancel()` on it to stop.
+    @discardableResult
+    public static func observeFeedUnread(_ handler: @escaping (Int) -> Void) -> OneTraceObservation {
+        current?.observeFeedUnread(handler) ?? OneTraceObservation {}
+    }
+
+    /// Calls `handler` on the main thread with the feed cards now and every time they change (loaded, shown, dismissed),
+    /// for your own feed screen; it does not load the feed — call `fetchFeed` when the screen opens.
+    @discardableResult
+    public static func observeFeed(_ handler: @escaping ([OneTraceFeedCard]) -> Void) -> OneTraceObservation {
+        current?.observeFeed(handler) ?? OneTraceObservation {}
+    }
+
+    /// The card is on screen (at least half of it, in the open feed): it becomes read, the message delivered and
+    /// opened. Reported once; `OneTraceFeedViewController` calls it for you.
+    public static func feedCardShown(_ card: OneTraceFeedCard) {
+        current?.reportFeed(card.token, "shown", nil)
+    }
+
+    /// The user tapped the card button, or the card without a button: reports the click and, with `openPushLinks`,
+    /// opens `buttonURL` as push links are opened.
+    public static func feedCardClicked(_ card: OneTraceFeedCard) {
+        guard let client = current else { return }
+        client.reportFeed(card.token, "clicked", card.buttonURL?.absoluteString)
+
+        #if canImport(UIKit) && !os(watchOS)
+        if client.config.openPushLinks, let url = card.buttonURL {
+            DispatchQueue.main.async { UIApplication.shared.open(url) }
+        }
+        #endif
+    }
+
+    /// The user removed the card: it leaves the feed and is not returned again.
+    public static func feedCardDismissed(_ card: OneTraceFeedCard) {
+        current?.reportFeed(card.token, "dismissed", nil)
+    }
+
     /// Call after the user answered the notification permission prompt.
     public static func notificationPermissionChanged() {
         #if canImport(UIKit) && !os(watchOS)

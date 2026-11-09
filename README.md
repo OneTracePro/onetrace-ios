@@ -5,16 +5,17 @@
 
 The iOS SDK of [OneTrace.pro](https://onetrace.pro), the customer data platform: events and screens of your app users in the same profiles as your website, CRM and stores — for segments, journeys, predictions and analytics — and push notifications.
 
-- Swift, iOS 13+. No dependencies: Foundation, UIKit and UserNotifications only.
+- Swift, iOS 13+. No dependencies: Foundation, UIKit and UserNotifications only (and SwiftUI for the feed view).
 - Events are queued on disk and sent in batches: nothing is lost offline or on a restart.
 - Push notifications through APNs with your `.p8` key, or through Firebase Messaging if the app already uses it.
+- In-app messages and a message feed with a ready-made screen for UIKit and SwiftUI.
 
 ## Installation
 
 Swift Package Manager: in Xcode **File → Add Package Dependencies…** with `https://github.com/OneTracePro/onetrace-ios`, or in `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/OneTracePro/onetrace-ios", from: "1.1.0")
+.package(url: "https://github.com/OneTracePro/onetrace-ios", from: "1.2.0")
 ```
 
 Add the `OneTrace` product to the app target, and `OneTraceNotificationService` to a Notification Service Extension if you want images in notifications.
@@ -103,11 +104,67 @@ import OneTraceNotificationService
 class NotificationService: OneTraceNotificationService {}
 ```
 
+## Message feed
+
+Personal cards — an offer, news, a reminder, a promo code — that stay in the app (and on your website) until they expire or the user removes them, with an unread count for a badge. Unlike in-app messages, a card is not shown once and gone: it waits in the feed. Cards are sent by journeys and campaigns through the **Message feed** channel, a feature of the OneTrace plan; without it the feed is empty.
+
+**Ready-made screen.** One call shows the feed modally with a Close button:
+
+```swift
+OneTrace.presentFeed()                       // over the top screen
+OneTrace.presentFeed(from: self)             // or over a view controller of yours
+```
+
+Or push it, or put it into a tab:
+
+```swift
+navigationController?.pushViewController(OneTraceFeedViewController(), animated: true)
+```
+
+In SwiftUI:
+
+```swift
+.sheet(isPresented: $showFeed) {
+    NavigationView {
+        OneTraceFeedView().navigationBarTitle(Text(OneTraceFeedView.title()), displayMode: .inline)
+    }
+}
+```
+
+The screen shows the cards in their layout (image on the left, image on top, or image only), pinned ones first, a remove button on each, pull to refresh and an empty state. A card at least half visible on the open screen is reported as shown: it is read, and the message is delivered and opened in the reports. A tap on the button — or on a card without a button — reports the click and opens the link like push links (`https://…` or your deep link; with `openPushLinks: false` the SDK only reports it). The labels («Updates», the empty state, «Remove», «Pinned») follow the device language: English, Russian, German, Uzbek, Turkish, Spanish, French, Italian, Portuguese or Chinese, English otherwise; pass `language:` to choose. Colors follow the light or dark appearance, unread cards and buttons take the app tint.
+
+**Unread badge.**
+
+```swift
+let badge = OneTrace.observeFeedUnread { count in      // on the main thread, now and on every change
+    feedButton.badgeValue = count > 0 ? "\(count)" : nil
+}
+// badge.cancel() when it is no longer needed
+```
+
+Once the app uses the feed, the SDK refreshes it when the app opens and after `reset()`; `OneTrace.feedUnreadCount` is the last count.
+
+**Your own UI.** Load the cards and report what the user sees and does:
+
+```swift
+OneTrace.fetchFeed { cards in            // main thread; or `let cards = await OneTrace.fetchFeed()`
+    self.cards = cards                   // OneTraceFeedCard: layout, title, body, imageURL, buttonText, buttonURL, pinned, read…
+}
+let updates = OneTrace.observeFeed { cards in self.cards = cards }   // after shows, clicks and removals
+
+OneTrace.feedCardShown(card)             // at least half of the card is on screen; reported once
+OneTrace.feedCardClicked(card)           // the button, or the card if `card.opensOnTap`: reports and opens buttonURL
+OneTrace.feedCardDismissed(card)         // removed: never returned again
+```
+
+A show that has not reached OneTrace yet (no network) still counts as read for the rest of the session, and a removed card does not come back on a refresh.
+
 ## How it works
 
 - Every installation has a random id; while push can be sent, it is the `mobile_push` identity of the profile, and the profile is reachable by the **Mobile push** channel in journeys and campaigns.
 - `identify` and `reset` re-register the installation: after a sign-out push goes to the next user, the profiles are not merged.
 - Events are sent when 20 are queued, every 30 seconds and when the app goes to the background; up to 1,000 are kept on disk.
+- The message feed is loaded by the anonymous id of the installation (never by the user id, which could be guessed), with the write key.
 
 ## Tests
 
