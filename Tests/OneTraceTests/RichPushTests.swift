@@ -161,10 +161,16 @@ final class RichPushTests: XCTestCase {
 
     func testTheSilentCheckAndTheSnoozedCopyAreNotReported() {
         let client = client()
-        let ping: [AnyHashable: Any] = ["aps": ["content-available": 1]]
+        // The platform puts `cdp_kind` next to `aps` in the APNs payload.
+        let ping: [AnyHashable: Any] = ["aps": ["content-available": 1], "cdp_kind": "ping"]
         XCTAssertEqual(PushMessage(ping).kind, .ping)
         XCTAssertEqual(PushMessage(["cdp_kind": "ping"]).kind, .ping)
         XCTAssertTrue(OneTrace.isSilentCheck(ping))
+        // A background push of the app itself (or of another service) is not the check: the app handles it.
+        let foreign: [AnyHashable: Any] = ["aps": ["content-available": 1], "sync": "orders"]
+        XCTAssertEqual(PushMessage(foreign).kind, .notification)
+        XCTAssertFalse(OneTrace.isSilentCheck(foreign))
+        XCTAssertFalse(OneTrace.isOneTraceNotification(foreign))
         XCTAssertNil(client.notificationOpened(ping))
         client.notificationReceived(ping)
 

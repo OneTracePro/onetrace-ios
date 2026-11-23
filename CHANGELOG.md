@@ -9,6 +9,10 @@
 - Remote Config: `OneTrace.remoteConfig.getString/getBoolean/getLong/getDouble/getJson(key, default)`, `fetch`, `addListener`/`removeListener`; at start and when the app opens at most once per `remoteConfigMinFetchInterval` (an hour), at once after `identify` and `reset`, with `ETag`/`304`; the saved values offline, the app defaults without them.
 - A new product `OneTraceLocation`: geofences — `enableGeofences()` (nothing without the «Always» permission; it starts by itself once granted), `disableGeofences()`, `requestLocationPermission()` (never called by the SDK), `maxMonitored` (18 nearest zones and a refresh region), the zone list every 12 hours with `ETag`; `geofence_entered`, `geofence_dwelled`, `geofence_exited` with `dwell_seconds`, only zone ids; a re-entry within 30 minutes of an exit is not reported.
 - The installation reports `push.capabilities` (`rich`, `live_activities`, `silent`) and, with `OneTraceLocation`, `location.permission`.
+- The silent check is only `cdp_kind: "ping"`: other background pushes (`content-available`) stay the app's.
+- `OneTraceActivityAttributes.ContentState.step` counts from 1, as on Android (`steps[step - 1]`).
+- `OneTraceLocation.register()` for apps on Flutter and React Native: the wrappers link only the core and reach geofences through it.
+- A refusal of the platform (402 without the plan's feature, other 4xx but 429) to `/app/config` and `/geofences` is asked again after the interval, not at every launch.
 
 ## 1.2.0 — 2026-11-09
 

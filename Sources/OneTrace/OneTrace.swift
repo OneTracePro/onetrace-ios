@@ -24,6 +24,7 @@ public enum OneTrace {
     private static let lock = NSLock()
     private static var client: Client?
     private static var wrapper: (name: String, version: String)?
+    private static var linkedGeofences: OneTraceGeofenceHooks?
     #if canImport(UIKit) && !os(watchOS)
     private static var lifecycle: AppLifecycle?
     #endif
@@ -212,8 +213,8 @@ public enum OneTrace {
         handleOpen(userInfo, actionIdentifier: actionIdentifier, original: nil, done: nil)
     }
 
-    /// The silent check of the installation (`content-available`): nothing to show or report; finish the background
-    /// fetch with `.noData`.
+    /// The silent check of the installation (`content-available` with `cdp_kind: "ping"`): nothing to show or report;
+    /// finish the background fetch with `.noData`. Other background pushes are not it and stay yours to handle.
     public static func isSilentCheck(_ userInfo: [AnyHashable: Any]) -> Bool {
         PushMessage(userInfo).kind == .ping
     }
@@ -293,6 +294,23 @@ public enum OneTrace {
         guard let client = current else { return false }
         client.loadGeofences(etag: etag) { completion($0.status, $0.body, $0.headers["etag"]) }
         return true
+    }
+
+    /// For the Flutter and React Native wrappers: the geofences of the `OneTraceLocation` product, set by
+    /// `OneTraceLocation.register()`. Nil when the app does not link the product: an app without geofences does not
+    /// reference CoreLocation and needs no location purpose strings in its Info.plist.
+    @_spi(OneTraceLocation)
+    public static var geofences: OneTraceGeofenceHooks? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return linkedGeofences
+        }
+        set {
+            lock.lock()
+            linkedGeofences = newValue
+            lock.unlock()
+        }
     }
 
     private static var current: Client? {

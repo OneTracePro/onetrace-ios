@@ -1,6 +1,10 @@
 import Foundation
 import XCTest
+import OneTrace
 @testable import OneTraceLocation
+#if canImport(CoreLocation) && os(iOS)
+import CoreLocation
+#endif
 
 final class GeofenceTests: XCTestCase {
     /// Moscow, Red Square.
@@ -145,9 +149,40 @@ final class GeofenceTests: XCTestCase {
         XCTAssertEqual(store.list?.geofences, [store15])
     }
 
+    func testAPlanWithoutGeofencesIsAskedAgainOnlyAfterTheRefreshInterval() {
+        let store = GeofenceStore(defaults: UserDefaults(suiteName: "onetrace-tests-\(UUID().uuidString)")!)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        // 402: the plan has no mobile engagement. Not a list, but not asked again at every launch either.
+        XCTAssertFalse(store.record(status: 402, body: "{}", etag: nil, now: now))
+        XCTAssertNil(store.list)
+        XCTAssertFalse(store.due(now: now.addingTimeInterval(3_600)))
+        XCTAssertTrue(store.due(now: now.addingTimeInterval(12 * 3_600)))
+
+        // No network and 429 are asked again at the next start.
+        let later = now.addingTimeInterval(12 * 3_600)
+        XCTAssertFalse(store.record(status: 429, body: "", etag: nil, now: later))
+        XCTAssertFalse(store.record(status: 0, body: "", etag: nil, now: later))
+        XCTAssertTrue(store.due(now: later.addingTimeInterval(60)))
+
+        XCTAssertTrue(store.record(status: 200, body: #"{"version": "a1", "refreshHours": 12, "geofences": []}"#, etag: "a1", now: later))
+        XCTAssertEqual(store.etag, "a1")
+        XCTAssertFalse(store.due(now: later.addingTimeInterval(60)))
+        XCTAssertTrue(store.record(status: 304, body: "", etag: nil, now: later.addingTimeInterval(13 * 3_600)))
+    }
+
     func testWithoutAlwaysPermissionNothingIsEnabled() {
-        // On Linux there are no regions; before `OneTrace.setup` there is nothing to enable on any platform.
+        #if canImport(CoreLocation) && os(iOS)
+        // The simulator of CI has no location permission: after `setup` the reason is returned and no region is watched.
+        OneTrace.setup(OneTraceConfig(writeKey: "cdp_wk_test", host: "https://crm.example.invalid", trackLifecycle: false))
+        XCTAssertEqual(OneTraceLocation.enableGeofences(), .needsAlwaysPermission)
+        let own = CLLocationManager().monitoredRegions.filter { $0.identifier.hasPrefix(GeofenceList.regionPrefix) || $0.identifier == GeofenceList.refreshRegionId }
+        XCTAssertTrue(own.isEmpty)
+        OneTraceLocation.disableGeofences()
+        #else
+        // On Linux there are no regions; before `OneTrace.setup` there is nothing to enable.
         XCTAssertEqual(OneTraceLocation.enableGeofences(), .notSetUp)
+        #endif
         XCTAssertEqual(OneTraceLocation.maxMonitored, 18)
         OneTraceLocation.maxMonitored = 40
         XCTAssertEqual(OneTraceLocation.maxMonitored, 19)

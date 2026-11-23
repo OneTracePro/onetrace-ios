@@ -56,13 +56,9 @@ public struct PushMessage {
         timerEnd = Self.date(userInfo["cdp_timer_end"])
         snoozed = Self.text(userInfo[Self.snoozedKey]) == "1"
 
-        if let declared = Self.text(userInfo["cdp_kind"]) {
-            kind = Kind(rawValue: declared) ?? .notification
-        } else if token == nil, alert == nil, Self.number(aps["content-available"]) == 1 {
-            kind = .ping
-        } else {
-            kind = .notification
-        }
+        // The silent check is only `cdp_kind: "ping"`: any other background push (`content-available`) belongs to the
+        // app or another service.
+        kind = Self.text(userInfo["cdp_kind"]).flatMap(Kind.init(rawValue:)) ?? .notification
     }
 
     public var isOneTrace: Bool { token != nil }
@@ -106,13 +102,6 @@ public struct PushMessage {
 
     static func link(_ value: Any?) -> URL? {
         text(value).flatMap(URL.init(string:))
-    }
-
-    static func number(_ value: Any?) -> Int? {
-        if let value = value as? Int { return value }
-        if let value = value as? Double { return Int(value) }
-        if let value = value as? String { return Int(value) }
-        return nil
     }
 
     /// A list of objects: an array (APNs) or a JSON string (Firebase data, where every value is a string).

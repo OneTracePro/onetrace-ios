@@ -63,6 +63,21 @@ public enum OneTraceLocation {
         #endif
     }
 
+    /// For an app on Flutter or React Native: call it in `application(_:didFinishLaunchingWithOptions:)`. The wrapper's
+    /// `enableGeofences`, `disableGeofences` and `requestLocationPermission` then reach this product (the wrappers do
+    /// not link it, so an app without geofences needs no location purpose strings), and the location manager is ready
+    /// for a zone event when iOS starts the app in the background.
+    public static func register() {
+        OneTrace.geofences = OneTraceGeofenceHooks(
+            enable: { OneTraceLocation.enableGeofences().rawValue },
+            disable: { OneTraceLocation.disableGeofences() },
+            requestPermission: { completion in OneTraceLocation.requestLocationPermission { completion($0.rawValue) } }
+        )
+        #if canImport(CoreLocation) && os(iOS)
+        onMain { _ = GeofenceMonitor.shared }
+        #endif
+    }
+
     /// Stops watching the zones and forgets the visits.
     public static func disableGeofences() {
         #if canImport(CoreLocation) && os(iOS)
@@ -124,10 +139,31 @@ final class GeofenceStore {
 
     /// The list is loaded at start and then every `refreshHours` (12).
     func due(now: Date) -> Bool {
-        guard let loadedAt = loadedAt, list != nil else { return true }
+        guard let loadedAt = loadedAt else { return true }
         let hours = Double(list?.refreshHours ?? 12)
         let elapsed = now.timeIntervalSince(loadedAt)
         return elapsed < 0 || elapsed >= hours * 3600
+    }
+
+    /// Saves an answer of `GET /geofences`; true when the saved list is current (200, 304). A refusal the next request
+    /// would get too (402 without the plan's feature, other 4xx but 429) waits for the refresh interval as well,
+    /// instead of a request at every launch; the network and 429, 5xx are asked again at the next start.
+    @discardableResult
+    func record(status: Int, body: String, etag: String?, now: Date) -> Bool {
+        if status == 304, list != nil {
+            loadedAt = now
+            return true
+        }
+        if (200..<300).contains(status), let fresh = GeofenceList(json: body) {
+            list = fresh
+            self.etag = etag ?? fresh.version
+            loadedAt = now
+            return true
+        }
+        if (400..<500).contains(status), status != 429 {
+            loadedAt = now
+        }
+        return false
     }
 }
 
@@ -217,16 +253,8 @@ final class GeofenceMonitor: NSObject, CLLocationManagerDelegate {
 
     private func loaded(status: Int, body: String, etag: String?) {
         loading = false
-        if status == 304 {
-            store.loadedAt = Date()
-        } else if (200..<300).contains(status), let list = GeofenceList(json: body) {
-            store.list = list
-            store.etag = etag ?? list.version
-            store.loadedAt = Date()
-        } else {
-            return
-        }
-        if store.wanted, status == 200 || status == 304, self.status == .authorizedAlways {
+        guard store.record(status: status, body: body, etag: etag, now: Date()) else { return }
+        if store.wanted, self.status == .authorizedAlways {
             apply(location: manager.location)
         }
     }

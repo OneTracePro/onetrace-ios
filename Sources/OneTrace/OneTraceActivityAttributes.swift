@@ -11,7 +11,7 @@ public struct OneTraceActivityAttributes: Codable, Hashable, Sendable {
     public struct ContentState: Codable, Hashable, Sendable {
         public var title: String
         public var status: String?
-        /// The current step, from 0, of `steps`.
+        /// The current step, from 1 to `steps.count`: `steps[step - 1]` is the current one (the platform sends 1–6).
         public var step: Int?
         /// Up to 6 step names, for example «Accepted», «Packed», «On the way», «Delivered».
         public var steps: [String]?

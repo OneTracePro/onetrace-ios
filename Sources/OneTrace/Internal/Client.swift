@@ -453,6 +453,13 @@ final class Client {
             remoteConfig.touch(now: now, anonymousId: anonymousId)
             return false
         }
+        // A refusal the next request would get too (402 without the plan's feature, other 4xx but 429): the saved
+        // values stay and the next request waits for the interval instead of every launch.
+        if (400..<500).contains(result.status), result.status != 429 {
+            log("Remote Config: HTTP \(result.status), asked again after the interval")
+            remoteConfig.touch(now: now, anonymousId: anonymousId)
+            return false
+        }
         guard result.successful, let keys = remoteConfig.apply(result.body, etag: result.headers["etag"], now: now, anonymousId: anonymousId) else {
             log("Remote Config: HTTP \(result.status) \(result.body.prefix(200))")
             return false

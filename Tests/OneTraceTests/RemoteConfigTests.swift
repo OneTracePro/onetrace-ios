@@ -106,6 +106,31 @@ final class RemoteConfigTests: XCTestCase {
         XCTAssertEqual(transport.configGets.count, 4, "an hour later")
     }
 
+    func testAPlanWithoutTheFeatureIsAskedAgainOnlyAfterTheIntervalButALimitedRequestIsRetried() {
+        // 402: the plan has no mobile engagement; the next launch within the hour does not ask again.
+        transport.config = (402, #"{"message": "Payment Required"}"#, nil)
+        let first = client()
+        first.start()
+        drain(first)
+        XCTAssertEqual(transport.configGets.count, 1)
+
+        now += 1200
+        let second = client()
+        second.start()
+        drain(second)
+        XCTAssertEqual(transport.configGets.count, 1, "the next launch within the hour")
+
+        now += 2460
+        transport.config = (429, "", nil)
+        second.appForeground(fromBackground: true)
+        drain(second)
+        XCTAssertEqual(transport.configGets.count, 2, "an hour later")
+
+        second.appForeground(fromBackground: true)
+        drain(second)
+        XCTAssertEqual(transport.configGets.count, 3, "429 is not an answer")
+    }
+
     func testSendsTheETagAndKeepsTheValuesOnNotModified() {
         transport.config = (200, Self.values, "\"v1\"")
         let client = client()

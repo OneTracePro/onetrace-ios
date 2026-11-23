@@ -149,7 +149,7 @@ and replace `NSExtensionMainStoryboard` with `NSExtensionPrincipalClass` = `$(PR
 
 ### Silent checks
 
-Once a week the platform checks installations that have not opened the app for a while with a silent push (`content-available`), to notice removed apps. It shows nothing and reports nothing; if you implement `application(_:didReceiveRemoteNotification:fetchCompletionHandler:)`:
+Once a week the platform checks installations that have not opened the app for a while with a silent push (`content-available` and `cdp_kind: "ping"`), to notice removed apps. It shows nothing and reports nothing; if you implement `application(_:didReceiveRemoteNotification:fetchCompletionHandler:)`, finish it and handle your own background pushes as before:
 
 ```swift
 if OneTrace.isSilentCheck(userInfo) { return completionHandler(.noData) }
@@ -194,14 +194,14 @@ struct OrderActivityWidget: Widget {
 }
 ```
 
-`context.state` has `title`, `status`, `step` and `steps` (up to 6 step names), `progress` (0…1), `endsAt` and `data` (your own strings); `context.attributes` — the `type` and `key` the platform updates the activity by, for example `order` and the order number.
+`context.state` has `title`, `status`, `step` (from 1: `steps[step - 1]` is the current one, as on Android) and `steps` (up to 6 step names), `progress` (0…1), `endsAt` and `data` (your own strings); `context.attributes` — the `type` and `key` the platform updates the activity by, for example `order` and the order number.
 
 Start an activity in the app and hand it to OneTrace — its push token, token changes and its end go to the platform:
 
 ```swift
 let activity = try Activity.request(
     attributes: OneTraceActivityAttributes(type: "order", key: "1001"),
-    content: .init(state: .init(title: "Order 1001", status: "Accepted", step: 0, steps: ["Accepted", "Packed", "On the way", "Delivered"]), staleDate: nil),
+    content: .init(state: .init(title: "Order 1001", status: "Accepted", step: 1, steps: ["Accepted", "Packed", "On the way", "Delivered"]), staleDate: nil),
     pushType: .token
 )
 OneTrace.liveActivities.track(activity)
@@ -231,8 +231,10 @@ let status = OneTraceLocation.enableGeofences()   // .enabled, .needsAlwaysPermi
 
 Without «Always» nothing is watched; once the user allows it, the zones start without a restart. The installation reports the permission (`none`, `foreground`, `always`) for segments.
 
+Only an app that links `OneTraceLocation` references CoreLocation: an app without geofences needs no location strings in Info.plist. The Flutter and React Native wrappers link only the core; an app on them that wants geofences links `OneTraceLocation` (see the wrapper's README) and calls `OneTraceLocation.register()` in `application(_:didFinishLaunchingWithOptions:)` — the wrapper's `enableGeofences`, `disableGeofences` and `requestLocationPermission` then reach the product.
+
 - iOS watches 20 regions per app: the SDK keeps the nearest 18 zones (`OneTraceLocation.maxMonitored`, up to 19) and a refresh region around the device; leaving it, it picks the nearest zones again.
-- The zone list is loaded at start and every 12 hours; removed and switched off zones stop being watched with the next list.
+- The zone list is loaded at start and every 12 hours; removed and switched off zones stop being watched with the next list. A refusal of the platform (402 on a plan without the feature, other 4xx but 429) is asked again after the same 12 hours, not at every launch.
 - `geofence_dwelled` comes at the first wake-up of the app inside the zone after its time, so it may come later than on Android.
 - Coming back into a zone within 30 minutes of leaving it is not reported (GPS jitter at the border), nor is the exit of that visit. An exit without a recorded entry (the phone was off) comes without `dwell_seconds`; an entry older than 24 hours is dropped.
 - Zone events are ordinary events: they wait in the queue offline and count towards the events of your plan.
