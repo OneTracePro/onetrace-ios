@@ -29,11 +29,16 @@ struct GeofenceSelector {
         }
 
         // The distance to the edge of the zone: a big zone is near once its border is.
-        let sorted = zones
-            .map { (zone: $0, edge: max(0, location.distance(to: $0.center) - $0.radius)) }
-            .sorted { $0.edge == $1.edge ? $0.zone.id < $1.zone.id : $0.edge < $1.edge }
+        let ranked: [RankedZone] = zones.map { (zone: Geofence) -> RankedZone in
+            let distance: Double = location.distance(to: zone.center)
+            return RankedZone(zone: zone, edge: max(0, distance - zone.radius))
+        }
+        let sorted: [RankedZone] = ranked.sorted { (left: RankedZone, right: RankedZone) -> Bool in
+            if left.edge == right.edge { return left.zone.id < right.zone.id }
+            return left.edge < right.edge
+        }
 
-        let chosen = sorted.prefix(maxZones).map(\.zone)
+        let chosen: [Geofence] = sorted.prefix(maxZones).map { (ranked: RankedZone) -> Geofence in ranked.zone }
         guard sorted.count > maxZones else {
             return Selection(zones: chosen, refreshRadius: nil, center: location)
         }
@@ -42,5 +47,11 @@ struct GeofenceSelector {
         let nextEdge = sorted[maxZones].edge
         let radius = min(maxRadius, max(Self.minRefreshRadius, nextEdge))
         return Selection(zones: chosen, refreshRadius: radius, center: location)
+    }
+
+    /// A zone with the distance from the device to its edge.
+    private struct RankedZone {
+        let zone: Geofence
+        let edge: Double
     }
 }

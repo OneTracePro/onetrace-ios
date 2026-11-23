@@ -79,10 +79,14 @@ struct GeoPoint: Equatable {
 
     /// Meters along the surface (haversine).
     func distance(to other: GeoPoint) -> Double {
-        let radians = Double.pi / 180
-        let dLat = (other.latitude - latitude) * radians
-        let dLon = (other.longitude - longitude) * radians
-        let a = sin(dLat / 2) * sin(dLat / 2) + cos(latitude * radians) * cos(other.latitude * radians) * sin(dLon / 2) * sin(dLon / 2)
-        return 2 * 6_371_000 * atan2(sqrt(a), sqrt(1 - a))
+        let radians: Double = Double.pi / 180
+        let dLat: Double = (other.latitude - latitude) * radians
+        let dLon: Double = (other.longitude - longitude) * radians
+        let sinLat: Double = sin(dLat / 2)
+        let sinLon: Double = sin(dLon / 2)
+        let cosines: Double = cos(latitude * radians) * cos(other.latitude * radians)
+        let a: Double = sinLat * sinLat + cosines * sinLon * sinLon
+        let earthRadius: Double = 6_371_000
+        return 2 * earthRadius * atan2(sqrt(a), sqrt(1 - a))
     }
 }
