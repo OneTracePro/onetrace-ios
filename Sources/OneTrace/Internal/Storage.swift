@@ -2,7 +2,8 @@ import Foundation
 
 /// Identifiers and SDK state kept between launches.
 final class Storage {
-    private let defaults: UserDefaults
+    /// Also holds the Remote Config values.
+    let defaults: UserDefaults
 
     init(defaults: UserDefaults = UserDefaults(suiteName: "pro.onetrace.sdk") ?? .standard) {
         self.defaults = defaults
@@ -50,6 +51,12 @@ final class Storage {
     var pushProvider: String? {
         get { defaults.string(forKey: "push_provider") }
         set { defaults.set(newValue, forKey: "push_provider") }
+    }
+
+    /// `none`, `foreground` or `always`, reported by `OneTraceLocation`; nil while the app does not use it.
+    var locationPermission: String? {
+        get { defaults.string(forKey: "location_permission") }
+        set { defaults.set(newValue, forKey: "location_permission") }
     }
 
     /// Fingerprint of the last device registration the platform accepted.

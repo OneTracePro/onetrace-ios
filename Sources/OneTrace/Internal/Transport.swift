@@ -6,6 +6,14 @@ import FoundationNetworking
 struct HttpResult {
     let status: Int
     let body: String
+    /// Response headers with lowercased names.
+    let headers: [String: String]
+
+    init(status: Int, body: String, headers: [String: String] = [:]) {
+        self.status = status
+        self.body = body
+        self.headers = headers
+    }
 
     var successful: Bool { (200..<300).contains(status) }
 
@@ -19,6 +27,15 @@ protocol Transport {
 
     /// Blocking GET: called from the SDK queue only.
     func get(_ path: String) -> HttpResult
+
+    /// Blocking GET with request headers (`If-None-Match`): called from the SDK queue only.
+    func get(_ path: String, headers: [String: String]) -> HttpResult
+}
+
+extension Transport {
+    func get(_ path: String, headers: [String: String]) -> HttpResult {
+        get(path)
+    }
 }
 
 /// JSON over HTTPS with the write key, `URLSession` only.
@@ -49,7 +66,11 @@ final class URLSessionTransport: Transport {
         send("GET", path, nil)
     }
 
-    private func send(_ method: String, _ path: String, _ data: Data?) -> HttpResult {
+    func get(_ path: String, headers: [String: String]) -> HttpResult {
+        send("GET", path, nil, headers)
+    }
+
+    private func send(_ method: String, _ path: String, _ data: Data?, _ headers: [String: String] = [:]) -> HttpResult {
         guard let url = URL(string: apiURL + path) else {
             return HttpResult(status: 0, body: "invalid request")
         }
@@ -61,13 +82,20 @@ final class URLSessionTransport: Transport {
         if data != nil { request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type") }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        // A conditional request of our own: the 304 comes back to the SDK instead of a cached copy.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
 
         let done = DispatchSemaphore(value: 0)
         var result = HttpResult(status: 0, body: "")
         session.dataTask(with: request) { data, response, error in
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let http = response as? HTTPURLResponse
             let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? error?.localizedDescription ?? ""
-            result = HttpResult(status: status, body: text)
+            var fields: [String: String] = [:]
+            http?.allHeaderFields.forEach { name, value in
+                if let name = name as? String, let value = value as? String { fields[name.lowercased()] = value }
+            }
+            result = HttpResult(status: http?.statusCode ?? 0, body: text, headers: fields)
             done.signal()
         }.resume()
         done.wait()

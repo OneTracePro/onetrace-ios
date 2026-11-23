@@ -18,6 +18,10 @@ public struct OneTraceConfig {
     public var openPushLinks: Bool
     /// Print what the SDK does to the console.
     public var debug: Bool
+    /// Remote Config values are asked for at most this often (seconds); `identify` and `reset` ask at once.
+    public var remoteConfigMinFetchInterval: TimeInterval
+    /// The App Group shared with the Notification Content Extension: a tapped carousel card then opens its own link.
+    public var appGroup: String?
 
     public init(
         writeKey: String,
@@ -27,7 +31,9 @@ public struct OneTraceConfig {
         maxQueueSize: Int = 1000,
         trackLifecycle: Bool = true,
         openPushLinks: Bool = true,
-        debug: Bool = false
+        debug: Bool = false,
+        remoteConfigMinFetchInterval: TimeInterval = 3600,
+        appGroup: String? = nil
     ) {
         self.writeKey = writeKey
         self.host = host
@@ -37,6 +43,8 @@ public struct OneTraceConfig {
         self.trackLifecycle = trackLifecycle
         self.openPushLinks = openPushLinks
         self.debug = debug
+        self.remoteConfigMinFetchInterval = remoteConfigMinFetchInterval
+        self.appGroup = appGroup
     }
 
     var apiURL: String {

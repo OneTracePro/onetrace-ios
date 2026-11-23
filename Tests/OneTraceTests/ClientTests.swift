@@ -11,19 +11,32 @@ final class FakeTransport: Transport {
     private let lock = NSLock()
     private(set) var requests: [Request] = []
     private(set) var gets: [String] = []
+    /// Request headers of the GETs, in order.
+    private(set) var getHeaders: [[String: String]] = []
     var batchStatus = 202
+    /// `GET /app/config`: the status, body and `ETag` of the answer.
+    var config: (status: Int, body: String, etag: String?) = (200, #"{"values": {}}"#, nil)
+    var liveActivityStatus = 200
     var inApp = "{\"data\": []}"
     var feed = "{\"data\": [], \"unread\": 0}"
     var feedStatus = 200
     var feedEventStatus = 200
 
     func get(_ path: String) -> HttpResult {
+        get(path, headers: [:])
+    }
+
+    func get(_ path: String, headers: [String: String]) -> HttpResult {
         lock.lock()
         defer { lock.unlock() }
         gets.append(path)
+        getHeaders.append(headers)
         if path.hasPrefix("/feed") { return HttpResult(status: feedStatus, body: feed) }
+        if path.hasPrefix("/app/config") { return HttpResult(status: config.status, body: config.body, headers: config.etag.map { ["etag": $0] } ?? [:]) }
         return HttpResult(status: 200, body: inApp)
     }
+
+    var configGets: [String] { gets.filter { $0.hasPrefix("/app/config") } }
 
     func post(_ path: String, _ body: [String: Any]) -> HttpResult {
         lock.lock()
@@ -31,7 +44,14 @@ final class FakeTransport: Transport {
         // Round-trip through JSON: what the platform would receive.
         let data = try! JSONSerialization.data(withJSONObject: body)
         requests.append(Request(path: path, body: try! JSONSerialization.jsonObject(with: data) as! [String: Any]))
-        return HttpResult(status: path == "/batch" ? batchStatus : path == "/feed/events" ? feedEventStatus : 200, body: "{}")
+        let status: Int
+        switch path {
+        case "/batch": status = batchStatus
+        case "/feed/events": status = feedEventStatus
+        case "/live-activities": status = liveActivityStatus
+        default: status = 200
+        }
+        return HttpResult(status: status, body: "{}")
     }
 
     var feedEvents: [[String: Any]] { requests.filter { $0.path == "/feed/events" }.map(\.body) }
@@ -39,6 +59,10 @@ final class FakeTransport: Transport {
     var events: [[String: Any]] { requests.filter { $0.path == "/batch" }.flatMap { $0.body["batch"] as! [[String: Any]] } }
 
     var registrations: [[String: Any]] { requests.filter { $0.path == "/devices" }.map(\.body) }
+
+    var pushEvents: [[String: Any]] { requests.filter { $0.path == "/push/events" }.map(\.body) }
+
+    var liveActivities: [[String: Any]] { requests.filter { $0.path == "/live-activities" }.map(\.body) }
 }
 
 final class ClientTests: XCTestCase {

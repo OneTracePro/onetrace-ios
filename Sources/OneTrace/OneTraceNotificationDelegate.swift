@@ -1,8 +1,10 @@
 #if canImport(UserNotifications) && !os(watchOS)
+import OneTracePush
 import UserNotifications
 
 /// A `UNUserNotificationCenter` delegate for OneTrace notifications: shows them in the foreground and reports them as
-/// delivered, reports taps and opens their links. Other notifications go to `next`, your own delegate.
+/// delivered, reports taps and button presses and opens their links, shows «Remind me later» again after its delay.
+/// Other notifications go to `next`, your own delegate.
 ///
 /// ```swift
 /// OneTraceNotificationDelegate.shared.next = self   // optional
@@ -42,10 +44,14 @@ public final class OneTraceNotificationDelegate: NSObject, UNUserNotificationCen
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let userInfo = response.notification.request.content.userInfo
+        let content = response.notification.request.content
+        let userInfo = content.userInfo
+        let action = response.actionIdentifier
 
-        if response.actionIdentifier == UNNotificationDefaultActionIdentifier, OneTrace.handleNotificationOpen(userInfo) {
-            completionHandler()
+        // A tap, or a button of the message (`b1`…`b3`); a swipe away and buttons of other categories go on.
+        if OneTrace.isOneTraceNotification(userInfo),
+           action == UNNotificationDefaultActionIdentifier || PushMessage(userInfo).button(action) != nil {
+            OneTrace.handleOpen(userInfo, actionIdentifier: action == UNNotificationDefaultActionIdentifier ? nil : action, original: content, done: completionHandler)
             return
         }
 

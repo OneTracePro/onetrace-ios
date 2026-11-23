@@ -7,7 +7,10 @@ The iOS SDK of [OneTrace.pro](https://onetrace.pro), the customer data platform:
 
 - Swift, iOS 13+. No dependencies: Foundation, UIKit and UserNotifications only (and SwiftUI for the feed view).
 - Events are queued on disk and sent in batches: nothing is lost offline or on a restart.
-- Push notifications through APNs with your `.p8` key, or through Firebase Messaging if the app already uses it.
+- Push notifications through APNs with your `.p8` key, or through Firebase Messaging if the app already uses it: images, a carousel, a countdown and up to three buttons, including «Remind me later».
+- Live Activities of order and delivery statuses and countdowns, updated by the platform through APNs.
+- Geofences (a separate product): entering, leaving and staying in your zones as events, without sending coordinates.
+- Remote Config: app parameters with values by segment, without a new app version.
 - In-app messages and a message feed with a ready-made screen for UIKit and SwiftUI.
 
 ## Installation
@@ -18,7 +21,7 @@ Swift Package Manager: in Xcode **File → Add Package Dependencies…** with `h
 .package(url: "https://github.com/OneTracePro/onetrace-ios", from: "1.2.0")
 ```
 
-Add the `OneTrace` product to the app target, and `OneTraceNotificationService` to a Notification Service Extension if you want images in notifications.
+Add the `OneTrace` product to the app target; `OneTraceNotificationService` to a Notification Service Extension (images, buttons, the timer end in the text), `OneTraceNotificationContent` to a Notification Content Extension (the carousel and the countdown of an expanded notification), and `OneTraceLocation` to the app target if you use geofences.
 
 ## Quick start
 
@@ -104,6 +107,153 @@ import OneTraceNotificationService
 class NotificationService: OneTraceNotificationService {}
 ```
 
+The extension also registers the buttons of the message (a notification category `cdp_buttons_…`; with a carousel or a timer — under the fixed categories `cdp_carousel` and `cdp_timer`) and adds the end of the timer to the text by the phone clock and language: «Sale on everything · until 18:00». Without the extension, or with an older SDK, the notification has no buttons and a tap opens the message link.
+
+### Buttons
+
+`OneTraceNotificationDelegate` handles them: «Open link» reports the open with the button and opens its link, «Open the app» brings the app forward, «Close» removes the notification without reports, «Remind me later» shows the same notification again after 60 or 180 minutes or tomorrow at 9:00 by the phone clock — the phone does it itself, even offline, and the platform does not send it again. A press passed on twice (the delegate and a wrapper) is reported once. With your own delegate pass the press on:
+
+```swift
+OneTrace.handleNotificationOpen(response.notification.request.content.userInfo, actionIdentifier: response.actionIdentifier)
+```
+
+If two notifications with different buttons are on the screen, both show the buttons of the newer one: iOS declares buttons by category.
+
+### Carousel and countdown
+
+Add a Notification Content Extension target with the `OneTraceNotificationContent` product:
+
+```swift
+import OneTraceNotificationContent
+
+class NotificationViewController: OneTraceNotificationContentViewController {
+    override var appGroup: String? { "group.com.example.shop" }   // optional, see below
+}
+```
+
+In its Info.plist, under `NSExtension` → `NSExtensionAttributes`:
+
+```xml
+<key>UNNotificationExtensionCategory</key>
+<array>
+    <string>cdp_carousel</string>
+    <string>cdp_timer</string>
+</array>
+<key>UNNotificationExtensionUserInteractionEnabled</key>
+<true/>
+<key>UNNotificationExtensionInitialContentSizeRatio</key>
+<real>0.8</real>
+```
+
+and replace `NSExtensionMainStoryboard` with `NSExtensionPrincipalClass` = `$(PRODUCT_MODULE_NAME).NotificationViewController`. An expanded notification then shows the carousel (swipe through the cards) and the countdown. A tap on a card opens the app with the card link when the app and the extension share an App Group: add the same group to both targets and pass it as `OneTraceConfig(…, appGroup: "group.com.example.shop")`; without it the message link opens. The carousel pictures are downloaded by `OneTraceNotificationService` (up to 10 seconds and 1 MB each). Keep the timer end in the text with the content extension too, or override `appendsTimerEnd` with false in your `NotificationService`.
+
+### Silent checks
+
+Once a week the platform checks installations that have not opened the app for a while with a silent push (`content-available`), to notice removed apps. It shows nothing and reports nothing; if you implement `application(_:didReceiveRemoteNotification:fetchCompletionHandler:)`:
+
+```swift
+if OneTrace.isSilentCheck(userInfo) { return completionHandler(.noData) }
+```
+
+## Live Activities
+
+Order and delivery statuses and countdowns on the lock screen and in the Dynamic Island (iOS 16.1+), started, updated and ended by OneTrace journeys and your server through APNs (the **Mobile push** integration needs the APNs key). Add `NSSupportsLiveActivities` = YES to the app Info.plist and a widget extension with the activity of `OneTraceActivityAttributes`:
+
+```swift
+import ActivityKit
+import OneTrace
+import SwiftUI
+import WidgetKit
+
+struct OrderActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: OneTraceActivityAttributes.self) { context in
+            VStack(alignment: .leading, spacing: 6) {
+                Text(context.state.title).font(.headline)
+                if let status = context.state.status { Text(status).font(.subheadline) }
+                if let progress = context.state.progress { ProgressView(value: progress) }
+                if let end = context.state.endsAt {
+                    // Counts down by itself; after `stale-date` the system marks the activity as outdated.
+                    Text(timerInterval: Date()...max(Date(), end), countsDown: true).monospacedDigit()
+                }
+                if context.isStale { Text("Updating…").font(.caption).foregroundStyle(.secondary) }
+            }
+            .padding()
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.bottom) { Text(context.state.status ?? context.state.title) }
+            } compactLeading: {
+                Text(context.state.title).lineLimit(1)
+            } compactTrailing: {
+                if let end = context.state.endsAt { Text(timerInterval: Date()...max(Date(), end), countsDown: true).monospacedDigit() }
+            } minimal: {
+                Image(systemName: "shippingbox")
+            }
+        }
+    }
+}
+```
+
+`context.state` has `title`, `status`, `step` and `steps` (up to 6 step names), `progress` (0…1), `endsAt` and `data` (your own strings); `context.attributes` — the `type` and `key` the platform updates the activity by, for example `order` and the order number.
+
+Start an activity in the app and hand it to OneTrace — its push token, token changes and its end go to the platform:
+
+```swift
+let activity = try Activity.request(
+    attributes: OneTraceActivityAttributes(type: "order", key: "1001"),
+    content: .init(state: .init(title: "Order 1001", status: "Accepted", step: 0, steps: ["Accepted", "Packed", "On the way", "Delivered"]), staleDate: nil),
+    pushType: .token
+)
+OneTrace.liveActivities.track(activity)
+```
+
+At every launch call `OneTrace.liveActivities.trackAll()` (iOS 16.1+): tokens of running activities change. On iOS 17.2+ the platform can start the activity itself (push-to-start) — then call `OneTrace.liveActivities.enablePushToStart(types: ["order"])` with the activity types of your templates instead; it tracks the activities it starts too. The installation reports `live_activities` while the user allows Live Activities of the app.
+
+## Geofences
+
+Zones of the project (Apps → Geofences in OneTrace) as events: `geofence_entered`, `geofence_dwelled` (in the zone longer than its time) and `geofence_exited` with `dwell_seconds`, with the zone id, external id and name — never the coordinates of the device. Use them in journeys and segments like any event.
+
+Add the `OneTraceLocation` product to the app and the location strings to Info.plist: `NSLocationWhenInUseUsageDescription` and `NSLocationAlwaysAndWhenInUseUsageDescription`. The SDK never asks for the permission itself — ask when it makes sense to the user, with your own screen or with the helper («While Using the App», then «Always»):
+
+```swift
+import OneTraceLocation
+
+OneTraceLocation.requestLocationPermission { permission in
+    // .none, .foreground or .always
+}
+```
+
+and turn the zones on — also in `application(_:didFinishLaunchingWithOptions:)`, after `OneTrace.setup`, because iOS starts the app in the background for a zone event:
+
+```swift
+let status = OneTraceLocation.enableGeofences()   // .enabled, .needsAlwaysPermission, .unavailable, .notSetUp
+```
+
+Without «Always» nothing is watched; once the user allows it, the zones start without a restart. The installation reports the permission (`none`, `foreground`, `always`) for segments.
+
+- iOS watches 20 regions per app: the SDK keeps the nearest 18 zones (`OneTraceLocation.maxMonitored`, up to 19) and a refresh region around the device; leaving it, it picks the nearest zones again.
+- The zone list is loaded at start and every 12 hours; removed and switched off zones stop being watched with the next list.
+- `geofence_dwelled` comes at the first wake-up of the app inside the zone after its time, so it may come later than on Android.
+- Coming back into a zone within 30 minutes of leaving it is not reported (GPS jitter at the border), nor is the exit of that visit. An exit without a recorded entry (the phone was off) comes without `dwell_seconds`; an entry older than 24 hours is dropped.
+- Zone events are ordinary events: they wait in the queue offline and count towards the events of your plan.
+
+## Remote Config
+
+App parameters (Apps → App settings in OneTrace): a key, a type, a default and rules by segment, platform and app version. Read them anywhere:
+
+```swift
+let banner = OneTrace.remoteConfig.getString("home_banner", "summer")
+if OneTrace.remoteConfig.getBoolean("new_checkout", false) { … }
+let limit = OneTrace.remoteConfig.getLong("cart_limit", 20)
+let discount = OneTrace.remoteConfig.getDouble("discount", 0)
+let layout = OneTrace.remoteConfig.getJson("layout") as? [String: Any]
+
+let observation = OneTrace.remoteConfig.addListener { changedKeys in … }   // on the main thread
+OneTrace.remoteConfig.fetch { changed in … }
+```
+
+The SDK asks for the values when the app starts and opens, at most once an hour (`OneTraceConfig.remoteConfigMinFetchInterval`), and at once after `identify` and `reset`; unchanged values cost a `304`. Until the first answer and offline the getters return the saved values, without them — the defaults you pass.
+
 ## Message feed
 
 Personal cards — an offer, news, a reminder, a promo code — that stay in the app (and on your website) until they expire or the user removes them, with an unread count for a badge. Unlike in-app messages, a card is not shown once and gone: it waits in the feed. Cards are sent by journeys and campaigns through the **Message feed** channel, a feature of the OneTrace plan; without it the feed is empty.
@@ -164,11 +314,12 @@ A show that has not reached OneTrace yet (no network) still counts as read for t
 - Every installation has a random id; while push can be sent, it is the `mobile_push` identity of the profile, and the profile is reachable by the **Mobile push** channel in journeys and campaigns.
 - `identify` and `reset` re-register the installation: after a sign-out push goes to the next user, the profiles are not merged.
 - Events are sent when 20 are queued, every 30 seconds and when the app goes to the background; up to 1,000 are kept on disk.
-- The message feed is loaded by the anonymous id of the installation (never by the user id, which could be guessed), with the write key.
+- The message feed and Remote Config values are loaded by the anonymous id of the installation (never by the user id, which could be guessed), with the write key.
+- The installation reports what it can show (`rich`, `live_activities`, `silent`) and, with `OneTraceLocation`, the location permission; the platform picks the kind of push by them.
 
 ## Tests
 
-`swift test` runs the core tests (macOS or Linux); CI also builds every target for the iOS simulator. Against a real project:
+`swift test` runs the core tests (macOS or Linux: the push keys, the timer text, «Remind me later», Remote Config, Live Activity reports and state, the zone selection and visits); CI also builds every target for the iOS simulator, including ActivityKit, UserNotifications and CoreLocation code. Against a real project:
 
 ```bash
 ONETRACE_URL=https://crm.example.com ONETRACE_KEY=cdp_wk_… swift test --filter LiveTests

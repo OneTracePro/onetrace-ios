@@ -1,4 +1,5 @@
 import Foundation
+import OneTracePush
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -13,6 +14,12 @@ public enum OneTrace {
         case apns
         case fcm
     }
+
+    /// Remote Config: app parameters with values by segment. Before `setup` the getters return your defaults.
+    public static let remoteConfig = OneTraceRemoteConfig { OneTrace.current }
+
+    /// Live Activities of `OneTraceActivityAttributes` that the platform updates through APNs (iOS 16.1+).
+    public static let liveActivities = OneTraceLiveActivities { OneTrace.current }
 
     private static let lock = NSLock()
     private static var client: Client?
@@ -38,6 +45,10 @@ public enum OneTrace {
             device: device
         )
         client = created
+        created.onRemoteConfigChange = { remoteConfig.notify($0) }
+        created.pushCapabilities = {
+            OneTraceLiveActivities.available ? ["rich", "live_activities", "silent"] : ["rich", "silent"]
+        }
 
         #if canImport(UIKit) && !os(watchOS)
         let permissions = NotificationPermission()
@@ -190,21 +201,56 @@ public enum OneTrace {
         userInfo[Client.pushToken] is String
     }
 
-    /// A tap on a notification (`userNotificationCenter(_:didReceive:withCompletionHandler:)`): reports the open and,
-    /// with `openPushLinks`, opens its link. `OneTraceNotificationDelegate` calls it for you.
+    /// A tap on a notification or on one of its buttons (`userNotificationCenter(_:didReceive:withCompletionHandler:)`,
+    /// `actionIdentifier` — `response.actionIdentifier`): reports the open with the button once and, with
+    /// `openPushLinks`, opens the message link, the tapped carousel card or the button link. «Close» reports nothing,
+    /// «Remind me later» shows the same notification again later. `OneTraceNotificationDelegate` calls it for you.
     ///
     /// - Returns: false when the notification is not from OneTrace.
     @discardableResult
-    public static func handleNotificationOpen(_ userInfo: [AnyHashable: Any]) -> Bool {
-        guard let client = current, isOneTraceNotification(userInfo) else { return false }
-        let url = client.notificationOpened(userInfo)
+    public static func handleNotificationOpen(_ userInfo: [AnyHashable: Any], actionIdentifier: String? = nil) -> Bool {
+        handleOpen(userInfo, actionIdentifier: actionIdentifier, original: nil, done: nil)
+    }
+
+    /// The silent check of the installation (`content-available`): nothing to show or report; finish the background
+    /// fetch with `.noData`.
+    public static func isSilentCheck(_ userInfo: [AnyHashable: Any]) -> Bool {
+        PushMessage(userInfo).kind == .ping
+    }
+
+    /// `original` — the delivered content, copied by «Remind me later»; `done` runs once the copy is scheduled.
+    @discardableResult
+    static func handleOpen(_ userInfo: [AnyHashable: Any], actionIdentifier: String?, original: AnyObject?, done: (() -> Void)?) -> Bool {
+        guard let client = current, isOneTraceNotification(userInfo) else {
+            done?()
+            return false
+        }
+
+        // The system identifiers of a tap (`UNNotificationDefaultActionIdentifier`) and of a swipe away.
+        let system = actionIdentifier?.hasPrefix("com.apple.") ?? false
+        if system, actionIdentifier?.hasSuffix("DismissActionIdentifier") ?? false {
+            done?()
+            return true
+        }
+        guard let open = client.notificationAction(userInfo, action: system ? nil : actionIdentifier) else {
+            done?()
+            return true
+        }
 
         #if canImport(UIKit) && !os(watchOS) && !targetEnvironment(macCatalyst)
-        if client.config.openPushLinks, let url = url {
+        if client.config.openPushLinks, let url = open.url {
             DispatchQueue.main.async { UIApplication.shared.open(url) }
         }
         #endif
 
+        #if canImport(UserNotifications) && !os(watchOS)
+        if let button = open.button, button.action == .snooze, let delay = button.snooze {
+            PushSnooze.schedule(userInfo: userInfo, original: original, delay: delay, done: done)
+            return true
+        }
+        #endif
+
+        done?()
         return true
     }
 
@@ -227,6 +273,26 @@ public enum OneTrace {
         wrapper = (name, version)
         client?.device.wrapper = wrapper
         lock.unlock()
+    }
+
+    /// For `OneTraceLocation`: whether `setup` was called.
+    @_spi(OneTraceLocation)
+    public static var isSetUp: Bool { current != nil }
+
+    /// For `OneTraceLocation`: the location permission (`none`, `foreground`, `always`) of the installation registration.
+    @_spi(OneTraceLocation)
+    public static func setLocationPermission(_ permission: String) {
+        current?.setLocationPermission(permission)
+    }
+
+    /// For `OneTraceLocation`: `GET /geofences` of this app with `If-None-Match`; `completion` gets the status, the body
+    /// and the `ETag` on the SDK queue. False before `setup`.
+    @_spi(OneTraceLocation)
+    @discardableResult
+    public static func loadGeofences(etag: String?, _ completion: @escaping (_ status: Int, _ body: String, _ etag: String?) -> Void) -> Bool {
+        guard let client = current else { return false }
+        client.loadGeofences(etag: etag) { completion($0.status, $0.body, $0.headers["etag"]) }
+        return true
     }
 
     private static var current: Client? {

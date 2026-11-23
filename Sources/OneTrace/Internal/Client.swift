@@ -1,4 +1,5 @@
 import Foundation
+import OneTracePush
 
 /// The SDK engine. Every call goes through one serial queue in call order: events are stamped with the ids that were
 /// current when they were made, disk and network never touch the main thread.
@@ -17,6 +18,19 @@ final class Client {
     private var timer: DispatchSourceTimer?
     /// The message feed; its `…Now` methods run on `queue`.
     let feed: Feed
+    /// Remote Config values; read from any thread.
+    let remoteConfig: RemoteConfigStore
+    /// Runs listener callbacks: the main thread in the app.
+    private let deliver: (@escaping () -> Void) -> Void
+
+    /// What this installation can show: `rich` and `silent` always, `live_activities` when the user allows them.
+    var pushCapabilities: () -> [String] = { ["rich", "silent"] }
+
+    /// Gets the changed Remote Config keys through `deliver`.
+    var onRemoteConfigChange: ((Set<String>) -> Void)?
+
+    /// Live Activity reports not delivered yet (no network); sent again when the app opens.
+    private var pendingLiveActivities: [[String: Any]] = []
 
     /// Whether the user allows notifications; refreshed by the app layer before registrations.
     var notificationsEnabled: () -> Bool
@@ -30,8 +44,9 @@ final class Client {
     /// In-app messages received but not shown yet (SDK queue only).
     private var inApp: [[String: Any]] = []
     private var seen: [String] = []
-    /// Taps already reported: the delegate and a wrapper (firebase_messaging and the like) may both pass one on.
-    private var openedTokens: [String] = []
+    /// Taps already reported, by token and button: the delegate and a wrapper (firebase_messaging and the like) may
+    /// both pass one on.
+    private var openedTaps: [String] = []
 
     init(
         config: OneTraceConfig,
@@ -52,6 +67,8 @@ final class Client {
         self.queue = queue
         self.clock = clock
         self.notificationsEnabled = notificationsEnabled
+        self.deliver = deliver
+        remoteConfig = RemoteConfigStore(defaults: storage.defaults)
         let debug = config.debug
         feed = Feed(transport: transport, anonymousId: { storage.anonymousId }, log: { message in if debug { print("[OneTrace] \(message)") } }, deliver: deliver)
     }
@@ -62,7 +79,10 @@ final class Client {
         timer.setEventHandler { [weak self] in self?.flushNow() }
         timer.resume()
         self.timer = timer
-        queue.async { self.registerNow(force: true) }
+        queue.async {
+            self.registerNow(force: true)
+            self.fetchRemoteConfigNow(force: false)
+        }
     }
 
     func track(_ event: String, _ properties: [String: Any?]) {
@@ -87,6 +107,8 @@ final class Client {
             // Another user on this installation: the platform moves it to them without merging the profiles. A new
             // signature re-registers too: with a required signature an unsigned user id was not accepted.
             if changed || signed { self.registerNow(force: false) }
+            // Another profile may get other values.
+            if changed { self.fetchRemoteConfigNow(force: true) }
         }
     }
 
@@ -97,6 +119,7 @@ final class Client {
             self.storage.userHash = userHash
             self.enqueue("alias", ["previousId": previous])
             self.registerNow(force: false)
+            self.fetchRemoteConfigNow(force: true)
         }
     }
 
@@ -107,6 +130,7 @@ final class Client {
             self.storage.userHash = nil
             self.storage.newAnonymousId()
             self.registerNow(force: false)
+            self.fetchRemoteConfigNow(force: true)
             self.feed.resetNow()
         }
     }
@@ -154,6 +178,8 @@ final class Client {
                 self.enqueue("track", ["event": "app_opened", "properties": ["from_background": fromBackground, "version": self.device.appVersion]])
             }
             if fromBackground { self.registerNow(force: false) }
+            self.fetchRemoteConfigNow(force: false)
+            self.sendLiveActivitiesNow()
             self.fetchInAppNow()
             self.presentInApp(nil)
             self.feed.refreshIfUsedNow()
@@ -170,26 +196,98 @@ final class Client {
         }
     }
 
-    /// A OneTrace notification was opened: reports the open (and the click on its link) once. Returns the link to open.
-    @discardableResult
-    func notificationOpened(_ userInfo: [AnyHashable: Any]) -> URL? {
-        guard let token = userInfo[Self.pushToken] as? String else { return nil }
+    /// A tap on a OneTrace notification (`action` nil) or on one of its buttons (`action` — the button id, `b1`…`b3`):
+    /// reports the open with the button once — the delegate and a wrapper may both pass it on; «close» reports
+    /// nothing. Nil when there is nothing to do: not a OneTrace notification, an unknown button, a repeat.
+    func notificationAction(_ userInfo: [AnyHashable: Any], action: String?) -> PushOpen? {
+        let message = PushMessage(userInfo)
+        guard let token = message.token, message.kind != .ping else { return nil }
+
+        let action = action.flatMap { $0.isEmpty ? nil : $0 }
+        var button: PushButton?
+        if let action = action {
+            guard let pressed = message.button(action), pressed.action != .dismiss else { return nil }
+            button = pressed
+        }
+
+        let tap = token + "\u{1F}" + (action ?? "")
         let first: Bool = queue.sync {
-            guard !openedTokens.contains(token) else { return false }
-            openedTokens.append(token)
-            if openedTokens.count > 50 { openedTokens.removeFirst() }
+            guard !openedTaps.contains(tap) else { return false }
+            openedTaps.append(tap)
+            if openedTaps.count > 50 { openedTaps.removeFirst() }
             return true
         }
         guard first else { return nil }
-        let url = (userInfo[Self.pushURL] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        queue.async { self.pushEventNow(token, "opened", url) }
-        return url.flatMap(URL.init(string:))
+
+        let url: URL?
+        switch button?.action {
+        case nil: url = selectedCard(token) ?? message.url
+        case .openURL?: url = button?.url
+        default: url = nil
+        }
+        queue.async { self.pushEventNow(token, "opened", url?.absoluteString, action: action) }
+        return PushOpen(url: url, button: button, message: message)
     }
 
-    /// A OneTrace notification reached the app: the message becomes delivered.
+    /// A tap on a OneTrace notification: reports the open (and the click on its link) once. Returns the link to open.
+    @discardableResult
+    func notificationOpened(_ userInfo: [AnyHashable: Any]) -> URL? {
+        notificationAction(userInfo, action: nil)?.url
+    }
+
+    /// A OneTrace notification reached the app: the message becomes delivered. The local copy of «Remind me later»
+    /// and the silent check do not count.
     func notificationReceived(_ userInfo: [AnyHashable: Any]) {
-        guard let token = userInfo[Self.pushToken] as? String else { return }
+        let message = PushMessage(userInfo)
+        guard let token = message.token, message.kind != .ping, !message.snoozed else { return }
         queue.async { self.pushEventNow(token, "received", nil) }
+    }
+
+    /// The carousel card tapped in the Notification Content Extension, through the App Group.
+    private func selectedCard(_ token: String) -> URL? {
+        guard let group = config.appGroup, let defaults = UserDefaults(suiteName: group) else { return nil }
+        return CarouselSelection.take(token: token, from: defaults, now: clock())
+    }
+
+    /// Asks for Remote Config values unless they were asked for within the interval (or `force`).
+    func fetchRemoteConfig(force: Bool, _ completion: ((Bool) -> Void)?) {
+        queue.async {
+            let changed = self.fetchRemoteConfigNow(force: force)
+            if let completion = completion { self.deliver { completion(changed) } }
+        }
+    }
+
+    /// A Live Activity event for `POST /live-activities`: `start_token`, `started`, `token`, `ended`, `dismissed`.
+    func reportLiveActivity(type: String, key: String?, event: String, token: String?) {
+        queue.async {
+            var body: [String: Any] = ["installationId": self.storage.installationId, "type": type, "event": event]
+            if let key = key { body["key"] = key }
+            if let token = token { body["token"] = token }
+            self.pendingLiveActivities.append(body)
+            if self.pendingLiveActivities.count > 50 { self.pendingLiveActivities.removeFirst() }
+            self.sendLiveActivitiesNow()
+        }
+    }
+
+    /// `none`, `foreground` or `always` from `OneTraceLocation`: re-registers the installation when it changed.
+    func setLocationPermission(_ permission: String) {
+        queue.async {
+            guard self.storage.locationPermission != permission else { return }
+            self.storage.locationPermission = permission
+            self.registerNow(force: false)
+        }
+    }
+
+    /// `GET /geofences` of this app for `OneTraceLocation`, conditional on the version it has.
+    func loadGeofences(etag: String?, _ completion: @escaping (HttpResult) -> Void) {
+        queue.async {
+            var query = URLComponents()
+            query.queryItems = [URLQueryItem(name: "appId", value: self.device.bundleId), URLQueryItem(name: "platform", value: "ios")]
+            let headers = etag.map { ["If-None-Match": $0] } ?? [:]
+            let result = self.transport.get("/geofences?" + (query.percentEncodedQuery ?? ""), headers: headers)
+            self.log("Geofences: HTTP \(result.status)")
+            completion(result)
+        }
     }
 
     /// Asks the platform for in-app messages now.
@@ -335,6 +433,48 @@ final class Client {
         matching.forEach(show)
     }
 
+    /// The Remote Config request: at start and when the app opens at most once per interval, at once after
+    /// `identify` and `reset` (`force`). Offline and on errors the saved values stay. True when values changed.
+    @discardableResult
+    private func fetchRemoteConfigNow(force: Bool) -> Bool {
+        let anonymousId = storage.anonymousId
+        let now = clock()
+        guard force || remoteConfig.due(now: now, minInterval: config.remoteConfigMinFetchInterval, anonymousId: anonymousId) else { return false }
+
+        var query = URLComponents()
+        query.queryItems = [
+            URLQueryItem(name: "anonymousId", value: anonymousId), URLQueryItem(name: "appId", value: device.bundleId),
+            URLQueryItem(name: "platform", value: "ios"), URLQueryItem(name: "appVersion", value: device.appVersion),
+        ]
+        let headers = remoteConfig.etag.map { ["If-None-Match": $0] } ?? [:]
+        let result = transport.get("/app/config?" + (query.percentEncodedQuery ?? ""), headers: headers)
+
+        if result.status == 304 {
+            remoteConfig.touch(now: now, anonymousId: anonymousId)
+            return false
+        }
+        guard result.successful, let keys = remoteConfig.apply(result.body, etag: result.headers["etag"], now: now, anonymousId: anonymousId) else {
+            log("Remote Config: HTTP \(result.status) \(result.body.prefix(200))")
+            return false
+        }
+
+        log("Remote Config: \(keys.count) changed")
+        if !keys.isEmpty, let notify = onRemoteConfigChange { deliver { notify(keys) } }
+        return !keys.isEmpty
+    }
+
+    private func sendLiveActivitiesNow() {
+        while let body = pendingLiveActivities.first {
+            let result = transport.post("/live-activities", body)
+            if result.retryable {
+                log("Live Activity \(body["event"] ?? "") later: HTTP \(result.status)")
+                return
+            }
+            pendingLiveActivities.removeFirst()
+            log("Live Activity \(body["event"] ?? "") reported: HTTP \(result.status) \(result.body.prefix(200))")
+        }
+    }
+
     private func registerNow(force: Bool) {
         let payload = registration()
         let fingerprint = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])).flatMap { String(data: $0, encoding: .utf8) }
@@ -353,12 +493,13 @@ final class Client {
     }
 
     private func registration() -> [String: Any] {
-        let push: [String: Any]
+        var push: [String: Any]
         if let token = storage.pushToken {
             push = ["provider": storage.pushProvider ?? "apns", "token": token, "enabled": notificationsEnabled()]
         } else {
             push = ["enabled": false]
         }
+        push["capabilities"] = pushCapabilities()
 
         var registration: [String: Any] = [
             "installationId": storage.installationId,
@@ -373,13 +514,15 @@ final class Client {
             "sdk": ["name": device.sdk.name, "version": device.sdk.version],
         ]
         if storage.userId != nil, let userHash = storage.userHash { registration["userHash"] = userHash }
+        if let permission = storage.locationPermission { registration["location"] = ["permission": permission] }
 
         return registration
     }
 
-    private func pushEventNow(_ token: String, _ event: String, _ url: String?) {
+    private func pushEventNow(_ token: String, _ event: String, _ url: String?, action: String? = nil) {
         var body: [String: Any] = ["token": token, "event": event]
         if let url = url { body["url"] = url }
+        if let action = action { body["action"] = action }
         let result = transport.post("/push/events", body)
         log("Push \(event) reported: HTTP \(result.status)")
     }
@@ -387,6 +530,16 @@ final class Client {
     private func log(_ message: @autoclosure () -> String) {
         if config.debug { print("[OneTrace] \(message())") }
     }
+}
+
+/// What a tap on a OneTrace notification or on its button did.
+struct PushOpen {
+    /// The link to open: the message link, the tapped carousel card or the button link; nil for «open the app» and
+    /// «remind me later».
+    let url: URL?
+    /// The pressed button; nil for a tap on the notification.
+    let button: PushButton?
+    let message: PushMessage
 }
 
 /// A feed listener id, set and read on the SDK queue only.
