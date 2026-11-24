@@ -18,7 +18,7 @@ The iOS SDK of [OneTrace.pro](https://onetrace.pro), the customer data platform:
 Swift Package Manager: in Xcode **File → Add Package Dependencies…** with `https://github.com/OneTracePro/onetrace-ios`, or in `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/OneTracePro/onetrace-ios", from: "1.2.0")
+.package(url: "https://github.com/OneTracePro/onetrace-ios", from: "1.3.0")
 ```
 
 Add the `OneTrace` product to the app target; `OneTraceNotificationService` to a Notification Service Extension (images, buttons, the timer end in the text), `OneTraceNotificationContent` to a Notification Content Extension (the carousel and the countdown of an expanded notification), and `OneTraceLocation` to the app target if you use geofences.

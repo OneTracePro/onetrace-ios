@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — 2026-11-24
 
 - Rich notifications: `OneTraceNotificationService` registers the buttons of the message (category `cdp_buttons_{hash8}`, or the fixed `cdp_carousel` and `cdp_timer`), downloads the carousel pictures (up to 10 seconds and 1 MB each) and adds the end of the timer to the text by the phone clock and language («until 18:00»; `appendsTimerEnd`).
 - A new product `OneTraceNotificationContent`: `OneTraceNotificationContentViewController` for a Notification Content Extension — the carousel (swipe, a tap opens the card link through `OneTraceConfig.appGroup`) and the countdown of an expanded notification.
